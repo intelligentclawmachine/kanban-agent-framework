@@ -1,0 +1,26 @@
+{
+  "version": "1.0",
+  "lastUpdated": "2026-02-04T03:05:01.272Z",
+  "files": [
+    {
+      "id": "3b060a98-bf81-424d-98b1-5ec0291bcd07",
+      "filename": "test-upload.txt",
+      "filepath": "outputs/2026-02-04/code/1770174301268-544cc4a7-db32-4093-9a0f-d147c17e3bde.txt",
+      "mimetype": "text/plain",
+      "size": 29,
+      "uploaded": "2026-02-04T03:05:01.271Z",
+      "taskIds": [],
+      "thumbnail": null,
+      "hash": "72206d6c480026fc015aec31b527bc884792045b38722df0973e57731c6fc323",
+      "tags": [
+        "test",
+        "phase2"
+      ],
+      "metadata": {
+        "width": null,
+        "height": null,
+        "generatedBy": null
+      }
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Sessions bar layout is handled in index.css via .active-agents-bar */

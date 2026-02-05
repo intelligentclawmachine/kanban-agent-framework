@@ -1,0 +1,8 @@
+import client from './client'
+
+export const sessionsApi = {
+  getActive: () => client.get('/sessions/active').then((res) => res.data),
+  getHistory: (limit = 10) =>
+    client.get(`/sessions/history?limit=${limit}`).then((res) => res.data),
+  kill: (id) => client.post(`/sessions/${id}/kill`).then((res) => res.data),
+}

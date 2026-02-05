@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Build outputs
+dist/
+build/
+
+# Runtime data (can be regenerated)
+*.log
+server.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Temporary files
+*.tmp
+*.temp
+
+# Claude Code
+.claude/
+
+# Generated outputs
+outputs/
+thumbnails/
+
+# Large data files (optional - uncomment to exclude from repo)
+# events.json
+# reports.json
+# tasks.json
