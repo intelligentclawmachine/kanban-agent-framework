@@ -3,9 +3,10 @@ import { useUIStore } from '../../store/uiStore'
 import { useCreateTask, useUpdateTask, useDeleteTask } from '../../hooks/useTasks'
 import { useToast } from '../Toast'
 import { AGENT_TYPES } from '../../utils/constants'
+import client from '../../api/client'
 import './TaskModal.css'
 
-const PRIORITY_OPTIONS = ['P3', 'P2', 'P1', 'P0']
+const DEFAULT_OUTPUT_FOLDER = '~/Desktop/Claw Creations/outputs'
 
 function TaskModal() {
   const { taskModalOpen, taskModalData, closeTaskModal } = useUIStore()
@@ -17,12 +18,12 @@ function TaskModal() {
   const [formData, setFormData] = React.useState({
     title: '',
     description: '',
-    priority: 'P2',
     status: 'backlog',
     dueDate: '',
-    tags: '',
     agentType: 'auto',
     planFirst: false,
+    outputFolder: DEFAULT_OUTPUT_FOLDER,
+    expectedOutput: '',
   })
 
   React.useEffect(() => {
@@ -30,23 +31,23 @@ function TaskModal() {
       setFormData({
         title: taskModalData.title || '',
         description: taskModalData.description || '',
-        priority: taskModalData.priority || 'P2',
         status: taskModalData.status || 'backlog',
         dueDate: taskModalData.dueDate ? taskModalData.dueDate.split('T')[0] : '',
-        tags: (taskModalData.tags || []).join(', '),
         agentType: taskModalData.agentType || 'auto',
         planFirst: taskModalData.planFirst === true,
+        outputFolder: taskModalData.outputFolder || DEFAULT_OUTPUT_FOLDER,
+        expectedOutput: taskModalData.expectedOutput || '',
       })
     } else {
       setFormData({
         title: '',
         description: '',
-        priority: 'P2',
         status: taskModalData?.status || 'backlog',
         dueDate: '',
-        tags: '',
         agentType: 'auto',
         planFirst: false,
+        outputFolder: DEFAULT_OUTPUT_FOLDER,
+        expectedOutput: '',
       })
     }
   }, [taskModalData])
@@ -56,15 +57,12 @@ function TaskModal() {
     const payload = {
       title: formData.title.trim(),
       description: formData.description.trim() || null,
-      priority: formData.priority,
       status: formData.status,
       dueDate: formData.dueDate ? new Date(formData.dueDate).toISOString() : null,
-      tags: formData.tags
-        .split(',')
-        .map((tag) => tag.trim())
-        .filter((tag) => tag.length > 0),
       agentType: formData.agentType,
       planFirst: formData.planFirst,
+      outputFolder: formData.outputFolder.trim() || DEFAULT_OUTPUT_FOLDER,
+      expectedOutput: formData.expectedOutput.trim() || null,
     }
 
     try {
@@ -90,6 +88,22 @@ function TaskModal() {
       closeTaskModal()
     } catch (err) {
       toast.error(`Failed to delete task: ${err.message}`)
+    }
+  }
+
+  const [pickingFolder, setPickingFolder] = React.useState(false)
+
+  const handlePickFolder = async () => {
+    setPickingFolder(true)
+    try {
+      const res = await client.post('/utils/pick-folder', { currentPath: formData.outputFolder })
+      if (res.data.success && res.data.path) {
+        setFormData((prev) => ({ ...prev, outputFolder: res.data.path }))
+      }
+    } catch (err) {
+      console.error('Folder picker error:', err)
+    } finally {
+      setPickingFolder(false)
     }
   }
 
@@ -130,24 +144,42 @@ function TaskModal() {
             />
           </div>
 
-          <div className="form-row">
-            <div className="form-group">
-              <label htmlFor="taskPriority">Priority</label>
-              <div className="priority-selector" id="prioritySelector">
-                {PRIORITY_OPTIONS.map((priority) => (
-                  <div
-                    key={priority}
-                    className={`priority-option ${formData.priority === priority ? 'selected' : ''}`}
-                    data-priority={priority}
-                    onClick={() => setFormData((prev) => ({ ...prev, priority }))}
-                  >
-                    {priority}
-                  </div>
-                ))}
-              </div>
-              <input type="hidden" id="taskPriority" value={formData.priority} />
-            </div>
+          <div className="form-group">
+            <label htmlFor="taskExpectedOutput">Expected Output</label>
+            <input
+              type="text"
+              className="form-input"
+              id="taskExpectedOutput"
+              placeholder="e.g., A summary document, A working HTML page..."
+              value={formData.expectedOutput}
+              onChange={(event) => setFormData((prev) => ({ ...prev, expectedOutput: event.target.value }))}
+            />
+          </div>
 
+          <div className="form-group">
+            <label htmlFor="taskOutputFolder">Output Folder</label>
+            <div className="folder-picker-row">
+              <input
+                type="text"
+                className="form-input"
+                id="taskOutputFolder"
+                placeholder="~/Desktop/Claw Creations/outputs"
+                value={formData.outputFolder}
+                onChange={(event) => setFormData((prev) => ({ ...prev, outputFolder: event.target.value }))}
+              />
+              <button
+                className="btn btn-secondary folder-browse-btn"
+                type="button"
+                onClick={handlePickFolder}
+                disabled={pickingFolder}
+                title="Browse folders in Finder"
+              >
+                {pickingFolder ? '...' : '📂 Browse'}
+              </button>
+            </div>
+          </div>
+
+          <div className="form-row">
             <div className="form-group">
               <label htmlFor="taskDueDate">Due Date</label>
               <input
@@ -158,32 +190,20 @@ function TaskModal() {
                 onChange={(event) => setFormData((prev) => ({ ...prev, dueDate: event.target.value }))}
               />
             </div>
-          </div>
 
-          <div className="form-group">
-            <label htmlFor="taskTags">Tags</label>
-            <input
-              type="text"
-              className="form-input"
-              id="taskTags"
-              placeholder="Comma separated"
-              value={formData.tags}
-              onChange={(event) => setFormData((prev) => ({ ...prev, tags: event.target.value }))}
-            />
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="taskAgentType">Agent Type</label>
-            <select
-              id="taskAgentType"
-              className="form-input"
-              value={formData.agentType}
-              onChange={(event) => setFormData((prev) => ({ ...prev, agentType: event.target.value }))}
-            >
-              {AGENT_TYPES.map((type) => (
-                <option key={type.value} value={type.value}>{type.label}</option>
-              ))}
-            </select>
+            <div className="form-group">
+              <label htmlFor="taskAgentType">Agent Type</label>
+              <select
+                id="taskAgentType"
+                className="form-input"
+                value={formData.agentType}
+                onChange={(event) => setFormData((prev) => ({ ...prev, agentType: event.target.value }))}
+              >
+                {AGENT_TYPES.map((type) => (
+                  <option key={type.value} value={type.value}>{type.label}</option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div className="form-group">

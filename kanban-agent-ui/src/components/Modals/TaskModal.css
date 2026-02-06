@@ -1,1 +1,19 @@
 /* Styles inherited from global index.css */
+
+.folder-picker-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.folder-picker-row .form-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.folder-browse-btn {
+  white-space: nowrap;
+  padding: 8px 14px !important;
+  font-size: 13px;
+  flex-shrink: 0;
+}

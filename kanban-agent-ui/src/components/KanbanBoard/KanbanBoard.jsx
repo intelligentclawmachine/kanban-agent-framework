@@ -23,7 +23,10 @@ function KanbanBoard() {
   const moveTask = useMoveTask()
   const [activeId, setActiveId] = React.useState(null)
 
-  const sensors = useSensors(useSensor(PointerSensor), useSensor(KeyboardSensor))
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor)
+  )
 
   const tasks = data?.tasks || []
 
@@ -62,7 +65,7 @@ function KanbanBoard() {
     const activeTask = filteredTasks.find((task) => task.id === active.id)
     const overColumn = over.data.current?.status || over.id
 
-    if (activeTask && activeTask.status !== overColumn) {
+    if (activeTask && activeTask.status !== overColumn && STATUS_ORDER.includes(overColumn)) {
       moveTask.mutate({ id: active.id, status: overColumn })
     }
 

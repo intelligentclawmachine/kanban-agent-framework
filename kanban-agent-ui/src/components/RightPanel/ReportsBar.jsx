@@ -1,6 +1,7 @@
 import React from 'react'
 import { useReports } from '../../hooks/useReports'
 import { useUIStore } from '../../store/uiStore'
+import client from '../../api/client'
 import './ReportsBar.css'
 
 function ReportsBar() {
@@ -51,7 +52,6 @@ function ReportsBar() {
               >
                 <div className="report-header">
                   <div className="report-title">{isError ? '❌ ' : ''}{report.title}</div>
-                  <span className={`report-priority priority-${report.priority?.toLowerCase()}`}>{report.priority}</span>
                 </div>
 
                 <div className="report-stats">
@@ -97,7 +97,21 @@ function ReportsBar() {
                 !report.outputFiles.includes('No files generated') &&
                 !report.outputFiles.includes('No files generated - execution failed') ? (
                   <div className="report-files">
-                    <div className="report-files-title">📁 Output Files:</div>
+                    <div className="report-files-header">
+                      <div className="report-files-title">📁 Output Files:</div>
+                      <button
+                        className="report-finder-btn"
+                        type="button"
+                        title="Open in Finder"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          const firstFile = report.outputFiles[0]
+                          client.post('/utils/open-in-finder', { filePath: firstFile }).catch(() => {})
+                        }}
+                      >
+                        📂
+                      </button>
+                    </div>
                     <div className="report-file-list">
                       {report.outputFiles.slice(0, 3).map((file) => (
                         <span key={file} className="report-file-tag">{file.split('/').pop()}</span>

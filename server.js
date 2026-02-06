@@ -958,7 +958,7 @@ async function createReport(task, completionSummary, prompts = []) {
   
   reports.push(report);
   await saveReports(reports);
-  
+
   await logEvent({
     type: 'task',
     severity: 'info',
@@ -966,7 +966,14 @@ async function createReport(task, completionSummary, prompts = []) {
     description: `Report generated for completed task: ${task.title}`,
     metadata: { reportId: report.id, taskId: task.id, promptsCount: prompts.length }
   });
-  
+
+  // Broadcast report creation for real-time UI updates
+  broadcastUpdate('report-created', {
+    reportId: report.id,
+    taskId: task.id,
+    title: task.title
+  });
+
   return report;
 }
 
@@ -985,21 +992,21 @@ async function saveArchivedTasks(archived) {
 
 async function archiveTask(task) {
   const archived = await getArchivedTasks();
-  
+
   const archivedTask = {
     ...task,
     archivedAt: new Date().toISOString(),
     originalStatus: task.status
   };
-  
+
   archived.push(archivedTask);
   await saveArchivedTasks(archived);
-  
+
   // Remove from active tasks
   const tasks = await getTasks();
   const filtered = tasks.filter(t => t.id !== task.id);
   await saveTasks(filtered);
-  
+
   await logEvent({
     type: 'task',
     severity: 'info',
@@ -1007,7 +1014,13 @@ async function archiveTask(task) {
     description: `Task archived: ${task.title}`,
     metadata: { taskId: task.id }
   });
-  
+
+  // Broadcast archive event for real-time UI updates
+  broadcastUpdate('task-archived', {
+    taskId: task.id,
+    title: task.title
+  });
+
   return archivedTask;
 }
 
@@ -1041,7 +1054,13 @@ async function restoreTaskFromArchive(taskId) {
     description: `Task restored from archive: ${task.title}`,
     metadata: { taskId: task.id }
   });
-  
+
+  // Broadcast restore event for real-time UI updates
+  broadcastUpdate('task-restored', {
+    taskId: task.id,
+    title: task.title
+  });
+
   return task;
 }
 
@@ -1286,31 +1305,32 @@ app.get('/api/v1/tasks/:id', async (req, res) => {
 // POST /tasks - Create new task
 app.post('/api/v1/tasks', async (req, res) => {
   try {
-    const { title, description, priority = 'P2', status = 'backlog', dueDate, tags, sourceContext, estimatedMinutes } = req.body;
-    
+    const { title, description, status = 'backlog', dueDate, sourceContext, estimatedMinutes, outputFolder, expectedOutput, agentType, planFirst } = req.body;
+
     if (!title || title.trim().length === 0) {
       return res.status(400).json({ error: 'Title is required' });
     }
-    
+
     const now = new Date().toISOString();
     const task = {
       id: generateId(),
       title: title.trim().substring(0, 200),
       description: description?.trim() || null,
-      priority,
       status,
       created: now,
       updated: now,
       completed: null,
       dueDate: dueDate || null,
-      tags: tags || [],
       assignee: 'claw-machine',
       estimatedMinutes: estimatedMinutes || null,
       actualMinutes: null,
       files: [],
       obsidianPath: null,
       sourceContext: sourceContext || null,
-      backlinks: [],
+      outputFolder: outputFolder || '~/Desktop/Claw Creations/outputs',
+      expectedOutput: expectedOutput?.trim() || null,
+      agentType: agentType || 'auto',
+      planFirst: planFirst === true,
       metadata: {
         createdBy: 'user',
         suggestionScore: null,
@@ -3419,12 +3439,16 @@ function getModelForAgentType(agentType) {
 async function executeStepWithAgent(taskId, step, allSteps, execId) {
   const tasks = await getTasks();
   const task = tasks.find(t => t.id === taskId);
-  
+
+  // Get output folder from task or use default
+  const outputFolder = task.outputFolder || '~/Desktop/Claw Creations/outputs';
+  const expectedOutput = task.expectedOutput ? `\n**Expected Deliverable:** ${task.expectedOutput}` : '';
+
   // Build execution prompt
   const executionPrompt = `You are an execution agent working on a task.
 
 **Task:** ${task.title}
-**Description:** ${task.description || 'No description'}
+**Description:** ${task.description || 'No description'}${expectedOutput}
 **Step ${step.number} of ${allSteps.length}:** ${step.title}
 **Agent Type:** ${step.agent}
 
@@ -3436,14 +3460,14 @@ ${allSteps.filter(s => s.number < step.number && s.status === 'complete').map(s 
 
 **Your Job:**
 1. Execute this step completely
-2. Create any necessary files in ~/Desktop/Claw Creations/outputs/
+2. Create any necessary files in ${outputFolder}/
 3. If this involves GitHub, create the repo and push files
 4. Report what you accomplished
 
 **Important Context:**
 - System username: ${process.env.USER || 'clawmachine'}
 - GitHub username (if needed): intelligentclawmachine
-- Output directory: ~/Desktop/Claw Creations/outputs/
+- Output directory: ${outputFolder}/
 
 **Required Output Format:**
 STEP_COMPLETE
@@ -3564,6 +3588,68 @@ function estimateTokens(input, output) {
 }
 
 /**
+ * Sanitize text to remove JSON artifacts and clean up formatting
+ */
+function sanitizeAgentText(text) {
+  if (!text) return '';
+
+  let cleaned = text;
+
+  // Remove any JSON-like content that leaked through
+  // Match patterns like "mediaUrl": null, "key": value, etc.
+  cleaned = cleaned.replace(/"[a-zA-Z_]+"\s*:\s*(null|true|false|"[^"]*"|\d+|\[[^\]]*\]|\{[^}]*\})\s*,?/g, '');
+
+  // Remove orphaned JSON brackets and braces
+  cleaned = cleaned.replace(/^\s*[\[\]{}]\s*$/gm, '');
+  cleaned = cleaned.replace(/,\s*[\]}]/g, '');
+  cleaned = cleaned.replace(/[\[{]\s*,/g, '');
+
+  // Remove empty JSON objects/arrays
+  cleaned = cleaned.replace(/\{\s*\}/g, '');
+  cleaned = cleaned.replace(/\[\s*\]/g, '');
+
+  // Remove lines that look like JSON structure
+  cleaned = cleaned.replace(/^\s*"[^"]+"\s*:\s*$/gm, '');
+
+  // Clean up multiple newlines
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+
+  // Trim whitespace
+  cleaned = cleaned.trim();
+
+  return cleaned;
+}
+
+/**
+ * Extract file paths from text using various patterns
+ */
+function extractFilePaths(text) {
+  if (!text) return [];
+
+  const paths = new Set();
+
+  // Match ~/path/to/file patterns
+  const tildeMatches = text.match(/~\/[^\s,\n\]"']+/g) || [];
+  tildeMatches.forEach(p => paths.add(p.replace(/[,\]"']$/, '')));
+
+  // Match /Users/... or /home/... patterns
+  const absMatches = text.match(/\/(?:Users|home)\/[^\s,\n\]"']+/g) || [];
+  absMatches.forEach(p => paths.add(p.replace(/[,\]"']$/, '')));
+
+  // Match Desktop/Claw Creations/outputs/... patterns
+  const relMatches = text.match(/Desktop\/Claw Creations\/outputs\/[^\s,\n\]"']+/g) || [];
+  relMatches.forEach(p => paths.add('~/' + p.replace(/[,\]"']$/, '')));
+
+  // Filter out invalid entries
+  return Array.from(paths).filter(p =>
+    p.length > 5 &&
+    !p.includes('undefined') &&
+    !p.endsWith('/') &&
+    (p.includes('.') || p.includes('output'))
+  );
+}
+
+/**
  * Parse agent response for results
  */
 function parseAgentResponse(response) {
@@ -3573,27 +3659,81 @@ function parseAgentResponse(response) {
     urls: [],
     notes: ''
   };
-  
-  // Extract result
-  const resultMatch = response.match(/Result:\s*(.+?)(?=\nFiles:|\nURLs:|\nNotes:|$)/is);
-  if (resultMatch) result.result = resultMatch[1].trim();
-  
-  // Extract files
-  const filesMatch = response.match(/Files Created:\s*(.+?)(?=\nURLs:|\nNotes:|$)/is);
+
+  if (!response) return result;
+
+  // Extract result - look for STEP_COMPLETE marker first
+  let resultText = '';
+  const stepCompleteMatch = response.match(/STEP_COMPLETE\s*\n?([\s\S]*?)(?=STEP_ERROR|$)/i);
+  if (stepCompleteMatch) {
+    const afterMarker = stepCompleteMatch[1];
+    const resultMatch = afterMarker.match(/Result:\s*(.+?)(?=\nFiles|\nURLs|\nNotes|$)/is);
+    if (resultMatch) resultText = resultMatch[1].trim();
+  }
+
+  // Fallback: try without STEP_COMPLETE marker
+  if (!resultText) {
+    const resultMatch = response.match(/Result:\s*(.+?)(?=\nFiles:|\nFiles Created:|\nURLs:|\nNotes:|$)/is);
+    if (resultMatch) resultText = resultMatch[1].trim();
+  }
+
+  // Sanitize the result text
+  result.result = sanitizeAgentText(resultText);
+
+  // If still no result, try to extract a summary from the response
+  if (!result.result && response.length > 0) {
+    // Take first meaningful paragraph
+    const lines = response.split('\n').filter(l => l.trim() && !l.includes('{') && !l.includes('}'));
+    if (lines.length > 0) {
+      result.result = sanitizeAgentText(lines.slice(0, 3).join(' ').substring(0, 500));
+    }
+  }
+
+  // Extract files - try multiple patterns
+  const filesMatch = response.match(/Files Created:\s*(.+?)(?=\nURLs:|\nNotes:|STEP_|$)/is);
   if (filesMatch) {
-    result.files = filesMatch[1].trim().split('\n').map(f => f.trim()).filter(f => f);
+    const filesText = filesMatch[1].trim();
+    if (filesText.toLowerCase() !== 'none') {
+      result.files = filesText.split('\n')
+        .map(f => f.trim().replace(/^[-•*]\s*/, ''))
+        .filter(f => f && f.toLowerCase() !== 'none' && f.length > 3);
+    }
   }
-  
+
+  // Also extract file paths from the full response
+  const extractedPaths = extractFilePaths(response);
+  extractedPaths.forEach(p => {
+    if (!result.files.includes(p)) {
+      result.files.push(p);
+    }
+  });
+
   // Extract URLs
-  const urlsMatch = response.match(/URLs:\s*(.+?)(?=\nNotes:|$)/is);
+  const urlsMatch = response.match(/URLs:\s*(.+?)(?=\nNotes:|STEP_|$)/is);
   if (urlsMatch) {
-    result.urls = urlsMatch[1].trim().split('\n').map(u => u.trim()).filter(u => u && u !== 'None');
+    const urlsText = urlsMatch[1].trim();
+    if (urlsText.toLowerCase() !== 'none') {
+      result.urls = urlsText.split('\n')
+        .map(u => u.trim())
+        .filter(u => u && u.startsWith('http'));
+    }
   }
-  
+
+  // Also extract URLs from full response
+  const urlMatches = response.match(/https?:\/\/[^\s,\n\]"'<>]+/g) || [];
+  urlMatches.forEach(u => {
+    const cleanUrl = u.replace(/[,\]"'<>]$/, '');
+    if (!result.urls.includes(cleanUrl) && !cleanUrl.includes('example.com')) {
+      result.urls.push(cleanUrl);
+    }
+  });
+
   // Extract notes
-  const notesMatch = response.match(/Notes:\s*(.+?)$/is);
-  if (notesMatch) result.notes = notesMatch[1].trim();
-  
+  const notesMatch = response.match(/Notes:\s*(.+?)(?=STEP_|$)/is);
+  if (notesMatch) {
+    result.notes = sanitizeAgentText(notesMatch[1].trim());
+  }
+
   return result;
 }
 
@@ -4359,58 +4499,16 @@ Confidence: High
     task.agentType = agentType || task.agentType || 'auto';
     await saveTasks(tasks);
     
-    // Create execution session (Phase 4)
-    const execId = `exec-${taskId}-${Date.now()}`;
-    const sessionId = `session-${Date.now()}`;
-    
-    const execSession = {
-      id: execId,
-      sessionId,
-      taskId,
-      taskTitle: task.title,
-      agentType: task.agentType,
-      type: 'execution',
-      status: 'executing',
-      startedAt: new Date().toISOString(),
-      currentStep: 1
-    };
-    
-    executionSessions.set(execId, execSession);
-    activeSessions.set(sessionId, {
-      id: sessionId,
-      taskId,
-      taskTitle: task.title,
-      agentType: task.agentType,
-      type: 'execution',
-      status: 'executing',
-      startedAt: new Date().toISOString(),
-      currentStep: 'Starting execution...'
-    });
-    await persistActiveSessions();
-    
-    console.log(`✅ Created execution session: ${sessionId} for task ${taskId}`);
-    console.log(`📊 Active sessions count: ${activeSessions.size}`);
-    
-    // Log event
-    await logEvent({
-      type: 'agent',
-      severity: 'info',
-      title: 'Plan execution started',
-      description: `Executing plan for task: ${task.title}`,
-      metadata: { taskId, execId, sessionId }
-    });
-    
-    // Queue execution (persistent)
+    // Queue execution (persistent) — session is created by executePlan() in the queue processor
+    // to avoid duplicate sessions showing in the active sessions panel
     await enqueueExecution(taskId, task);
-    
-    // Notify WebSocket clients
-    broadcastUpdate('execution-started', { taskId, sessionId, execId });
-    
+
+    console.log(`✅ Queued execution for task ${taskId}`);
+    console.log(`📊 Active sessions count: ${activeSessions.size}`);
+
     res.json({
       success: true,
       taskId,
-      sessionId,
-      execId,
       status: 'queued',
       message: 'Plan execution queued'
     });
@@ -4525,6 +4623,77 @@ app.get('/api/v1/sessions/:sessionId/log', async (req, res) => {
   } catch (err) {
     console.error('Error getting session log:', err);
     res.status(500).json({ error: 'Failed to get session log' });
+  }
+});
+
+// ============================================
+// UTILITY: Folder picker & Open in Finder
+// ============================================
+
+// POST /api/v1/utils/pick-folder - Open native macOS folder picker
+app.post('/api/v1/utils/pick-folder', async (req, res) => {
+  try {
+    const { currentPath } = req.body || {};
+    const defaultDir = currentPath
+      ? currentPath.replace(/^~/, process.env.HOME)
+      : path.join(process.env.HOME, 'Desktop');
+
+    const { execSync } = require('child_process');
+    const script = `osascript -e 'set theFolder to choose folder with prompt "Select Output Folder" default location POSIX file "${defaultDir}"' -e 'return POSIX path of theFolder'`;
+    const result = execSync(script, { timeout: 60000, encoding: 'utf-8' }).trim();
+
+    // Convert back to ~ shorthand if under home dir
+    const homePath = process.env.HOME;
+    const displayPath = result.startsWith(homePath)
+      ? '~' + result.slice(homePath.length)
+      : result;
+
+    // Remove trailing slash for consistency
+    const cleanPath = displayPath.replace(/\/$/, '');
+
+    res.json({ success: true, path: cleanPath });
+  } catch (err) {
+    // User cancelled the dialog or other error
+    if (err.status === 1 || err.message?.includes('User canceled')) {
+      return res.json({ success: false, cancelled: true });
+    }
+    console.error('Error opening folder picker:', err);
+    res.status(500).json({ error: 'Failed to open folder picker' });
+  }
+});
+
+// POST /api/v1/utils/open-in-finder - Open a path in macOS Finder
+app.post('/api/v1/utils/open-in-finder', async (req, res) => {
+  try {
+    const { filePath } = req.body;
+    if (!filePath) {
+      return res.status(400).json({ error: 'filePath is required' });
+    }
+
+    const { exec } = require('child_process');
+    const resolvedPath = filePath.replace(/^~/, process.env.HOME);
+
+    // Check if path exists
+    try {
+      await fs.access(resolvedPath);
+    } catch {
+      return res.status(404).json({ error: 'Path not found', path: resolvedPath });
+    }
+
+    // Check if it's a file or directory
+    const stat = await fs.stat(resolvedPath);
+    if (stat.isFile()) {
+      // Reveal file in Finder (selects it)
+      exec(`open -R "${resolvedPath}"`);
+    } else {
+      // Open directory in Finder
+      exec(`open "${resolvedPath}"`);
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error opening in Finder:', err);
+    res.status(500).json({ error: 'Failed to open in Finder' });
   }
 });
 

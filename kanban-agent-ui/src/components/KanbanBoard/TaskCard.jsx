@@ -69,13 +69,11 @@ function TaskCard({ task, isDragging = false }) {
       style={style}
       className={`task-card ${task.status === 'done' ? 'completed' : ''}`}
       data-task-id={task.id}
-      data-priority={task.priority}
       onClick={() => openTaskModal(task)}
       {...attributes}
       {...listeners}
     >
       <div className="task-header">
-        <span className={`priority-badge priority-${task.priority?.toLowerCase()}`}>{task.priority}</span>
         <button
           className={`start-btn-inline ${isExecuting ? 'executing' : ''}`}
           type="button"
@@ -93,13 +91,10 @@ function TaskCard({ task, isDragging = false }) {
 
       <h3 className="task-title">{task.title}</h3>
       {task.description ? <p className="task-description">{task.description}</p> : null}
-
-      {task.tags && task.tags.length > 0 ? (
-        <div className="task-tags">
-          {task.tags.map((tag) => (
-            <span key={tag} className="tag">{tag}</span>
-          ))}
-        </div>
+      {task.expectedOutput ? (
+        <p className="task-expected-output">
+          <strong>Expected:</strong> {task.expectedOutput}
+        </p>
       ) : null}
 
       <div className="task-footer">
