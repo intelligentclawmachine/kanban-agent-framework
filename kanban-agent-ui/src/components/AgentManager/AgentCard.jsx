@@ -49,9 +49,9 @@ function AgentCard({ agent }) {
     setMenuOpen(false)
     try {
       await setDefaultAgent.mutateAsync(agent.id)
-      toast.success(`${agent.name} set as default agent`)
+      toast.success(agent.isDefault ? `${agent.name} is no longer default` : `${agent.name} set as default agent`)
     } catch (err) {
-      toast.error(`Failed to set default: ${err.message}`)
+      toast.error(`Failed to update default: ${err.message}`)
     }
   }
 
@@ -112,9 +112,9 @@ function AgentCard({ agent }) {
             <div className="agent-menu-dropdown">
               <button type="button" onClick={handleEdit}>✏️ Edit</button>
               <button type="button" onClick={handleDuplicate}>📋 Duplicate</button>
-              {!agent.isDefault && (
-                <button type="button" onClick={handleSetDefault}>⭐ Set as Default</button>
-              )}
+              <button type="button" onClick={handleSetDefault}>
+                {agent.isDefault ? '☆ Unset Default' : '⭐ Set as Default'}
+              </button>
               <hr />
               <button type="button" className="danger" onClick={handleDelete}>🗑️ Delete</button>
             </div>

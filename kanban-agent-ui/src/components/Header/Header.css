@@ -1,1 +1,11 @@
 /* Styles inherited from global index.css */
+
+.header-nav {
+  display: flex;
+  gap: 4px;
+}
+
+.header-nav .btn {
+  padding: 6px 14px;
+  font-size: 0.85rem;
+}

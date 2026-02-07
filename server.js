@@ -1305,7 +1305,7 @@ app.get('/api/v1/tasks/:id', async (req, res) => {
 // POST /tasks - Create new task
 app.post('/api/v1/tasks', async (req, res) => {
   try {
-    const { title, description, status = 'backlog', dueDate, sourceContext, estimatedMinutes, outputFolder, expectedOutput, agentType, agentId, planFirst, telliEnabled, contextPaths } = req.body;
+    const { title, description, status = 'backlog', dueDate, sourceContext, estimatedMinutes, outputFolder, expectedOutput, agentType, agentId, planFirst, telliEnabled, dedicatedOutput, contextPaths } = req.body;
 
     if (!title || title.trim().length === 0) {
       return res.status(400).json({ error: 'Title is required' });
@@ -1333,6 +1333,7 @@ app.post('/api/v1/tasks', async (req, res) => {
       agentId: agentId || null,
       planFirst: planFirst === true,
       telliEnabled: telliEnabled === true,
+      dedicatedOutput: dedicatedOutput !== false,
       contextPaths: Array.isArray(contextPaths) ? contextPaths : [],
       metadata: {
         createdBy: 'user',
@@ -1374,7 +1375,7 @@ app.patch('/api/v1/tasks/:id', async (req, res) => {
       return res.status(404).json({ error: 'Task not found' });
     }
     
-    const allowedFields = ['title', 'description', 'priority', 'status', 'dueDate', 'tags', 'estimatedMinutes', 'actualMinutes', 'files', 'backlinks', 'planFirst', 'agentType', 'agentId', 'telliEnabled', 'outputFolder', 'expectedOutput', 'contextPaths', 'executionStatus', 'completionSummary'];
+    const allowedFields = ['title', 'description', 'priority', 'status', 'dueDate', 'tags', 'estimatedMinutes', 'actualMinutes', 'files', 'backlinks', 'planFirst', 'agentType', 'agentId', 'telliEnabled', 'dedicatedOutput', 'outputFolder', 'expectedOutput', 'contextPaths', 'executionStatus', 'completionSummary'];
     const updates = {};
     
     for (const field of allowedFields) {
@@ -3482,7 +3483,13 @@ async function executeStepWithAgent(taskId, step, allSteps, execId) {
   const agentSystemPrompt = agentProfile?.prompt || '';
 
   // Get output folder from task or use default
-  const outputFolder = task.outputFolder || '~/Desktop/Claw Creations/outputs';
+  let outputFolder = task.outputFolder || '~/Desktop/Claw Creations/outputs';
+  if (task.dedicatedOutput !== false) {
+    const safeName = task.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').substring(0, 50);
+    outputFolder = `${outputFolder}/${safeName}`;
+    const resolved = outputFolder.replace(/^~/, process.env.HOME);
+    await fs.mkdir(resolved, { recursive: true });
+  }
   const expectedOutput = task.expectedOutput ? `\n**Expected Deliverable:** ${task.expectedOutput}` : '';
 
   // Build context paths section
@@ -4906,15 +4913,36 @@ function createAgentRecord(payload = {}) {
 }
 
 async function loadAgents() {
-  try {
-    const raw = await fs.readFile(AGENT_PROFILES_FILE, 'utf8');
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed;
-    if (parsed?.profiles && Array.isArray(parsed.profiles)) return parsed.profiles;
-    return [];
-  } catch {
-    return [];
+  let agents = [];
+  const fallbackPath = path.join(process.env.HOME, '.openclaw', 'agents.json');
+  for (const filePath of [AGENT_PROFILES_FILE, fallbackPath]) {
+    try {
+      const raw = await fs.readFile(filePath, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) { agents = parsed; break; }
+      if (parsed?.profiles?.length > 0) { agents = parsed.profiles; break; }
+    } catch { /* try next */ }
   }
+
+  // Also scan subagents directory for profiles not already in the list
+  const subagentsDir = path.join(process.env.HOME, '.openclaw', 'subagents');
+  try {
+    const existingIds = new Set(agents.map(a => a.id));
+    const dirs = await fs.readdir(subagentsDir);
+    for (const dir of dirs) {
+      const profilePath = path.join(subagentsDir, dir, 'agent-profile.json');
+      try {
+        const raw = await fs.readFile(profilePath, 'utf8');
+        const profile = JSON.parse(raw);
+        if (profile?.id && !existingIds.has(profile.id)) {
+          agents.push(profile);
+          existingIds.add(profile.id);
+        }
+      } catch { /* skip */ }
+    }
+  } catch { /* subagents dir doesn't exist, that's fine */ }
+
+  return agents;
 }
 
 async function saveAgents(agents) {
@@ -4924,6 +4952,11 @@ async function saveAgents(agents) {
     JSON.stringify({ version: 1, lastUpdated: new Date().toISOString(), profiles: agents }, null, 2),
     'utf8'
   );
+  // Also write to legacy path so other tools can find them
+  const legacyPath = path.join(process.env.HOME, '.openclaw', 'agents.json');
+  try {
+    await fs.writeFile(legacyPath, JSON.stringify(agents, null, 2), 'utf8');
+  } catch { /* best-effort */ }
 }
 
 async function persistAgentProfileFile(agent) {
@@ -4977,6 +5010,65 @@ async function seedDefaultAgentProfiles() {
   await ensureAgentStorageDir();
   return await loadAgents();
 }
+
+// GET /models - available models for agent configuration
+app.get('/api/v1/models', async (req, res) => {
+  try {
+    const configPath = path.join(process.env.HOME, '.openclaw', 'openclaw.json');
+    const rawFs = require('fs');
+    let models = [];
+    const grouped = {};
+
+    if (rawFs.existsSync(configPath)) {
+      try {
+        const config = JSON.parse(rawFs.readFileSync(configPath, 'utf8'));
+
+        // Primary source: agents.defaults.models (the full model registry with aliases)
+        const defaultModels = config?.agents?.defaults?.models || {};
+        for (const [modelId, meta] of Object.entries(defaultModels)) {
+          const parts = modelId.split('/');
+          const provider = parts.length > 2 ? parts.slice(0, -1).join('/') : parts[0];
+          models.push({
+            id: modelId,
+            alias: meta.alias || parts[parts.length - 1],
+            provider,
+          });
+        }
+
+        // Secondary source: models.providers (explicit provider configs)
+        const providers = config?.models?.providers || {};
+        const existingIds = new Set(models.map(m => m.id));
+        for (const [provName, provData] of Object.entries(providers)) {
+          for (const m of (provData.models || [])) {
+            const fullId = `${provName}/${m.id}`;
+            if (!existingIds.has(fullId)) {
+              models.push({
+                id: fullId,
+                alias: m.name || m.id,
+                provider: provName,
+              });
+              existingIds.add(fullId);
+            }
+          }
+        }
+      } catch { /* use empty list */ }
+    }
+
+    // Sort models by provider then alias
+    models.sort((a, b) => a.provider.localeCompare(b.provider) || a.alias.localeCompare(b.alias));
+
+    // Group by provider
+    for (const m of models) {
+      if (!grouped[m.provider]) grouped[m.provider] = [];
+      grouped[m.provider].push(m);
+    }
+
+    res.json({ models, grouped });
+  } catch (err) {
+    console.error('Error loading models:', err);
+    res.status(500).json({ error: 'Failed to load models' });
+  }
+});
 
 // GET /agents - list all agent profiles
 app.get('/api/v1/agents', async (req, res) => {
@@ -5097,14 +5189,17 @@ app.post('/api/v1/agents/:id/duplicate', async (req, res) => {
   }
 });
 
-// POST /agents/:id/set-default
+// POST /agents/:id/set-default (toggles: if already default, un-defaults it)
 app.post('/api/v1/agents/:id/set-default', async (req, res) => {
   try {
     const agents = await loadAgents();
     const idx = agents.findIndex((a) => a.id === req.params.id);
     if (idx === -1) return res.status(404).json({ error: 'Agent not found' });
+    const wasDefault = agents[idx].isDefault;
     agents.forEach((agent) => { agent.isDefault = false; });
-    agents[idx].isDefault = true;
+    if (!wasDefault) {
+      agents[idx].isDefault = true;
+    }
     agents[idx].updatedAt = new Date().toISOString();
     await Promise.all([saveAgents(agents), persistAgentProfileFile(agents[idx])]);
     broadcastUpdate('agent-updated');

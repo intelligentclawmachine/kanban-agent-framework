@@ -1,5 +1,6 @@
 import React from 'react'
 import { useWebSocket } from './hooks/useWebSocket'
+import { useUIStore } from './store/uiStore'
 import Header from './components/Header/Header'
 import ActiveSessions from './components/Sessions/ActiveSessions'
 import PastSessions from './components/Sessions/PastSessions'
@@ -14,30 +15,41 @@ import SessionViewModal from './components/Modals/SessionViewModal'
 import ReportModal from './components/Modals/ReportModal'
 import TaskDetailModal from './components/Modals/TaskDetailModal'
 import ExecutionProgress from './components/RightPanel/ExecutionProgress'
+import AgentManagerPage from './components/AgentManager/AgentManagerPage'
+import AgentCreator from './components/AgentManager/AgentCreator'
 import './App.css'
 
 function App() {
   useWebSocket()
+  const activeView = useUIStore((state) => state.activeView)
 
   return (
     <div className="app">
       <Header />
-      <div className="active-agents-bar">
-        <ActiveSessions />
-        <PastSessions />
-      </div>
-      <FilterBar />
-      <KanbanBoard />
-      <ReportsBar />
-      <EventStream />
-      <ArchivePanel />
-      <ExecutionProgress />
+
+      {activeView === 'agents' ? (
+        <AgentManagerPage />
+      ) : (
+        <>
+          <div className="active-agents-bar">
+            <ActiveSessions />
+            <PastSessions />
+          </div>
+          <FilterBar />
+          <KanbanBoard />
+          <ReportsBar />
+          <EventStream />
+          <ArchivePanel />
+          <ExecutionProgress />
+        </>
+      )}
 
       <TaskModal />
       <TaskDetailModal />
       <PlanReviewModal />
       <SessionViewModal />
       <ReportModal />
+      <AgentCreator />
     </div>
   )
 }

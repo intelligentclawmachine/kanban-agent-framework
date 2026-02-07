@@ -25,6 +25,7 @@ function TaskModal() {
     agentId: null,
     planFirst: false,
     telliEnabled: false,
+    dedicatedOutput: true,
     outputFolder: DEFAULT_OUTPUT_FOLDER,
     expectedOutput: '',
     contextPaths: [],
@@ -44,6 +45,7 @@ function TaskModal() {
         agentId: taskModalData.agentId || null,
         planFirst: taskModalData.planFirst === true,
         telliEnabled: taskModalData.telliEnabled === true,
+        dedicatedOutput: taskModalData.dedicatedOutput !== false,
         outputFolder: taskModalData.outputFolder || DEFAULT_OUTPUT_FOLDER,
         expectedOutput: taskModalData.expectedOutput || '',
         contextPaths: Array.isArray(taskModalData.contextPaths) ? taskModalData.contextPaths : [],
@@ -58,6 +60,7 @@ function TaskModal() {
         agentId: null,
         planFirst: false,
         telliEnabled: false,
+        dedicatedOutput: true,
         outputFolder: DEFAULT_OUTPUT_FOLDER,
         expectedOutput: '',
         contextPaths: [],
@@ -76,6 +79,7 @@ function TaskModal() {
       agentId: formData.agentId,
       planFirst: formData.planFirst,
       telliEnabled: formData.telliEnabled,
+      dedicatedOutput: formData.dedicatedOutput,
       outputFolder: formData.outputFolder.trim() || DEFAULT_OUTPUT_FOLDER,
       expectedOutput: formData.expectedOutput.trim() || null,
       contextPaths: formData.contextPaths,
@@ -239,6 +243,15 @@ function TaskModal() {
                 {pickingFolder ? '...' : 'Browse'}
               </button>
             </div>
+            <label className="checkbox-row" style={{ marginTop: 8 }}>
+              <input
+                type="checkbox"
+                checked={formData.dedicatedOutput}
+                onChange={(event) => setFormData((prev) => ({ ...prev, dedicatedOutput: event.target.checked }))}
+              />
+              Dedicated output subfolder
+            </label>
+            <span className="form-hint">Creates a subfolder named after the task inside the output folder</span>
           </div>
 
           <div className="form-group">

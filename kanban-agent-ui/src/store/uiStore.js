@@ -1,6 +1,10 @@
 import { create } from 'zustand'
 
 export const useUIStore = create((set) => ({
+  // Active view: 'kanban' or 'agents'
+  activeView: 'kanban',
+  setActiveView: (view) => set({ activeView: view }),
+
   taskModalOpen: false,
   taskModalData: null,
   openTaskModal: (task = null) => set({ taskModalOpen: true, taskModalData: task }),
@@ -34,4 +38,24 @@ export const useUIStore = create((set) => ({
 
   searchQuery: '',
   setSearchQuery: (query) => set({ searchQuery: query }),
+
+  // Agent modal state
+  agentModalOpen: false,
+  agentModalData: null,
+  openAgentModal: (agent = null) => set({ agentModalOpen: true, agentModalData: agent }),
+  closeAgentModal: () => set({ agentModalOpen: false, agentModalData: null }),
+
+  // Agent Manager filters/sort
+  agentSearchQuery: '',
+  setAgentSearchQuery: (query) => set({ agentSearchQuery: query }),
+  agentTypeFilter: 'all',
+  setAgentTypeFilter: (filter) => set({ agentTypeFilter: filter }),
+  agentTagFilter: 'all',
+  setAgentTagFilter: (filter) => set({ agentTagFilter: filter }),
+  agentSortBy: 'name',
+  setAgentSortBy: (sort) => set({ agentSortBy: sort }),
+  agentSortOrder: 'asc',
+  setAgentSortOrder: (order) => set({ agentSortOrder: order }),
+  agentViewMode: 'grid',
+  setAgentViewMode: (mode) => set({ agentViewMode: mode }),
 }))
