@@ -1,8 +1,8 @@
 import React from 'react'
 import { useUIStore } from '../../store/uiStore'
 import { useCreateTask, useUpdateTask, useDeleteTask } from '../../hooks/useTasks'
+import { useAgents } from '../../hooks/useAgents'
 import { useToast } from '../Toast'
-import { AGENT_TYPES } from '../../utils/constants'
 import client from '../../api/client'
 import './TaskModal.css'
 
@@ -13,6 +13,7 @@ function TaskModal() {
   const createTask = useCreateTask()
   const updateTask = useUpdateTask()
   const deleteTask = useDeleteTask()
+  const { data: agentsData } = useAgents()
   const toast = useToast()
 
   const [formData, setFormData] = React.useState({
@@ -21,10 +22,16 @@ function TaskModal() {
     status: 'backlog',
     dueDate: '',
     agentType: 'auto',
+    agentId: null,
     planFirst: false,
+    telliEnabled: false,
     outputFolder: DEFAULT_OUTPUT_FOLDER,
     expectedOutput: '',
+    contextPaths: [],
   })
+
+  // Custom agent profiles from the Agent Manager
+  const customAgents = agentsData?.agents || []
 
   React.useEffect(() => {
     if (taskModalData) {
@@ -34,9 +41,12 @@ function TaskModal() {
         status: taskModalData.status || 'backlog',
         dueDate: taskModalData.dueDate ? taskModalData.dueDate.split('T')[0] : '',
         agentType: taskModalData.agentType || 'auto',
+        agentId: taskModalData.agentId || null,
         planFirst: taskModalData.planFirst === true,
+        telliEnabled: taskModalData.telliEnabled === true,
         outputFolder: taskModalData.outputFolder || DEFAULT_OUTPUT_FOLDER,
         expectedOutput: taskModalData.expectedOutput || '',
+        contextPaths: Array.isArray(taskModalData.contextPaths) ? taskModalData.contextPaths : [],
       })
     } else {
       setFormData({
@@ -45,9 +55,12 @@ function TaskModal() {
         status: taskModalData?.status || 'backlog',
         dueDate: '',
         agentType: 'auto',
+        agentId: null,
         planFirst: false,
+        telliEnabled: false,
         outputFolder: DEFAULT_OUTPUT_FOLDER,
         expectedOutput: '',
+        contextPaths: [],
       })
     }
   }, [taskModalData])
@@ -60,9 +73,12 @@ function TaskModal() {
       status: formData.status,
       dueDate: formData.dueDate ? new Date(formData.dueDate).toISOString() : null,
       agentType: formData.agentType,
+      agentId: formData.agentId,
       planFirst: formData.planFirst,
+      telliEnabled: formData.telliEnabled,
       outputFolder: formData.outputFolder.trim() || DEFAULT_OUTPUT_FOLDER,
       expectedOutput: formData.expectedOutput.trim() || null,
+      contextPaths: formData.contextPaths,
     }
 
     try {
@@ -92,6 +108,7 @@ function TaskModal() {
   }
 
   const [pickingFolder, setPickingFolder] = React.useState(false)
+  const [pickingContext, setPickingContext] = React.useState(false)
 
   const handlePickFolder = async () => {
     setPickingFolder(true)
@@ -105,6 +122,51 @@ function TaskModal() {
     } finally {
       setPickingFolder(false)
     }
+  }
+
+  const handlePickContextFile = async () => {
+    setPickingContext(true)
+    try {
+      const res = await client.post('/utils/pick-file', {})
+      if (res.data.success && res.data.path) {
+        setFormData((prev) => ({
+          ...prev,
+          contextPaths: prev.contextPaths.includes(res.data.path)
+            ? prev.contextPaths
+            : [...prev.contextPaths, res.data.path],
+        }))
+      }
+    } catch (err) {
+      console.error('File picker error:', err)
+    } finally {
+      setPickingContext(false)
+    }
+  }
+
+  const handlePickContextFolder = async () => {
+    setPickingContext(true)
+    try {
+      const res = await client.post('/utils/pick-folder', {})
+      if (res.data.success && res.data.path) {
+        setFormData((prev) => ({
+          ...prev,
+          contextPaths: prev.contextPaths.includes(res.data.path)
+            ? prev.contextPaths
+            : [...prev.contextPaths, res.data.path],
+        }))
+      }
+    } catch (err) {
+      console.error('Folder picker error:', err)
+    } finally {
+      setPickingContext(false)
+    }
+  }
+
+  const removeContextPath = (pathToRemove) => {
+    setFormData((prev) => ({
+      ...prev,
+      contextPaths: prev.contextPaths.filter((p) => p !== pathToRemove),
+    }))
   }
 
   if (!taskModalOpen) return null
@@ -174,9 +236,49 @@ function TaskModal() {
                 disabled={pickingFolder}
                 title="Browse folders in Finder"
               >
-                {pickingFolder ? '...' : '📂 Browse'}
+                {pickingFolder ? '...' : 'Browse'}
               </button>
             </div>
+          </div>
+
+          <div className="form-group">
+            <label>Context Files / Folders</label>
+            <div className="context-picker-row">
+              <button
+                className="btn btn-secondary context-pick-btn"
+                type="button"
+                onClick={handlePickContextFile}
+                disabled={pickingContext}
+              >
+                + File
+              </button>
+              <button
+                className="btn btn-secondary context-pick-btn"
+                type="button"
+                onClick={handlePickContextFolder}
+                disabled={pickingContext}
+              >
+                + Folder
+              </button>
+              {pickingContext && <span className="picking-indicator">Picking...</span>}
+            </div>
+            {formData.contextPaths.length > 0 && (
+              <div className="context-chips">
+                {formData.contextPaths.map((p) => (
+                  <span key={p} className="context-chip" title={p}>
+                    <span className="context-chip-text">{p.split('/').pop() || p}</span>
+                    <button
+                      type="button"
+                      className="context-chip-remove"
+                      onClick={() => removeContextPath(p)}
+                      title="Remove"
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="form-row">
@@ -192,17 +294,40 @@ function TaskModal() {
             </div>
 
             <div className="form-group">
-              <label htmlFor="taskAgentType">Agent Type</label>
+              <label htmlFor="taskAgentType">Agent</label>
               <select
                 id="taskAgentType"
                 className="form-input"
-                value={formData.agentType}
-                onChange={(event) => setFormData((prev) => ({ ...prev, agentType: event.target.value }))}
+                value={formData.agentId ? `custom:${formData.agentId}` : ''}
+                onChange={(event) => {
+                  const val = event.target.value
+                  if (val.startsWith('custom:')) {
+                    const id = val.slice(7)
+                    const agent = customAgents.find(a => a.id === id)
+                    setFormData((prev) => ({
+                      ...prev,
+                      agentId: id,
+                      agentType: agent?.type || 'custom',
+                    }))
+                  } else {
+                    setFormData((prev) => ({
+                      ...prev,
+                      agentId: null,
+                      agentType: 'auto',
+                    }))
+                  }
+                }}
               >
-                {AGENT_TYPES.map((type) => (
-                  <option key={type.value} value={type.value}>{type.label}</option>
+                <option value="">Select an agent...</option>
+                {customAgents.map((agent) => (
+                  <option key={agent.id} value={`custom:${agent.id}`}>
+                    {agent.icon || '🤖'} {agent.name}
+                  </option>
                 ))}
               </select>
+              {customAgents.length === 0 && (
+                <span className="form-hint">Create agents in Agent Manager first</span>
+              )}
             </div>
           </div>
 
@@ -214,6 +339,14 @@ function TaskModal() {
                 onChange={(event) => setFormData((prev) => ({ ...prev, planFirst: event.target.checked }))}
               />
               Plan before execution
+            </label>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={formData.telliEnabled}
+                onChange={(event) => setFormData((prev) => ({ ...prev, telliEnabled: event.target.checked }))}
+              />
+              Allow Telli to pick up
             </label>
           </div>
 

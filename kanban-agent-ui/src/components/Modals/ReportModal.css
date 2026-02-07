@@ -1,5 +1,9 @@
 /* Styles inherited from global index.css */
 
+.report-modal {
+  max-width: 700px;
+}
+
 .report-file-row {
   display: flex;
   align-items: center;

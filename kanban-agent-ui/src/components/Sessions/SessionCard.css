@@ -1,1 +1,55 @@
 /* Styles inherited from global index.css */
+
+.agent-card-health {
+  font-size: 10px;
+  line-height: 1;
+}
+
+.agent-card-status {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-card-timer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+  padding: 4px 8px;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+}
+
+.health-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.health-healthy {
+  color: var(--accent-green);
+  background: rgba(76, 175, 80, 0.1);
+}
+
+.health-slow {
+  color: var(--accent-yellow);
+  background: rgba(255, 193, 7, 0.1);
+}
+
+.health-stale {
+  color: var(--accent-red);
+  background: rgba(244, 67, 54, 0.1);
+  animation: stale-blink 1.5s infinite;
+}
+
+@keyframes stale-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}

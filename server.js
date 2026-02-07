@@ -1305,7 +1305,7 @@ app.get('/api/v1/tasks/:id', async (req, res) => {
 // POST /tasks - Create new task
 app.post('/api/v1/tasks', async (req, res) => {
   try {
-    const { title, description, status = 'backlog', dueDate, sourceContext, estimatedMinutes, outputFolder, expectedOutput, agentType, planFirst } = req.body;
+    const { title, description, status = 'backlog', dueDate, sourceContext, estimatedMinutes, outputFolder, expectedOutput, agentType, agentId, planFirst, telliEnabled, contextPaths } = req.body;
 
     if (!title || title.trim().length === 0) {
       return res.status(400).json({ error: 'Title is required' });
@@ -1330,7 +1330,10 @@ app.post('/api/v1/tasks', async (req, res) => {
       outputFolder: outputFolder || '~/Desktop/Claw Creations/outputs',
       expectedOutput: expectedOutput?.trim() || null,
       agentType: agentType || 'auto',
+      agentId: agentId || null,
       planFirst: planFirst === true,
+      telliEnabled: telliEnabled === true,
+      contextPaths: Array.isArray(contextPaths) ? contextPaths : [],
       metadata: {
         createdBy: 'user',
         suggestionScore: null,
@@ -1371,7 +1374,7 @@ app.patch('/api/v1/tasks/:id', async (req, res) => {
       return res.status(404).json({ error: 'Task not found' });
     }
     
-    const allowedFields = ['title', 'description', 'priority', 'status', 'dueDate', 'tags', 'estimatedMinutes', 'actualMinutes', 'files', 'backlinks', 'planFirst', 'agentType', 'executionStatus', 'completionSummary'];
+    const allowedFields = ['title', 'description', 'priority', 'status', 'dueDate', 'tags', 'estimatedMinutes', 'actualMinutes', 'files', 'backlinks', 'planFirst', 'agentType', 'agentId', 'telliEnabled', 'outputFolder', 'expectedOutput', 'contextPaths', 'executionStatus', 'completionSummary'];
     const updates = {};
     
     for (const field of allowedFields) {
@@ -3425,12 +3428,44 @@ function parsePlanSteps(content) {
 }
 
 /**
- * Get model name for agent type
- * NOTE: Currently using Kimi K2.5 for all agent types for simplicity
+ * Get display model name from model ID
  */
-function getModelForAgentType(agentType) {
-  // All agents use Kimi K2.5 for now
-  return 'Kimi K2.5';
+function getModelDisplayName(modelId) {
+  if (!modelId) return 'Default';
+  // Extract the last segment for display: "anthropic/claude-sonnet-4-5" -> "claude-sonnet-4-5"
+  const parts = modelId.split('/');
+  return parts[parts.length - 1];
+}
+
+/**
+ * Look up the agent profile for a task and return its settings
+ */
+async function getAgentProfileForTask(taskId) {
+  const tasks = await getTasks();
+  const task = tasks.find(t => t.id === taskId);
+  if (!task || !task.agentId) return null;
+
+  const agents = await loadAgents();
+  return agents.find(a => a.id === task.agentId) || null;
+}
+
+/**
+ * Get the default model from openclaw.json config
+ */
+function getDefaultModel() {
+  try {
+    const configPath = path.join(process.env.HOME, '.openclaw', 'openclaw.json');
+    const rawFs = require('fs');
+    if (rawFs.existsSync(configPath)) {
+      const config = JSON.parse(rawFs.readFileSync(configPath, 'utf8'));
+      if (config?.agents?.defaults?.model?.primary) {
+        return config.agents.defaults.model.primary;
+      }
+    }
+  } catch (err) {
+    console.warn('Could not read default model from openclaw.json:', err.message);
+  }
+  return 'anthropic/claude-sonnet-4-5';
 }
 
 /**
@@ -3440,26 +3475,56 @@ async function executeStepWithAgent(taskId, step, allSteps, execId) {
   const tasks = await getTasks();
   const task = tasks.find(t => t.id === taskId);
 
+  // Look up agent profile for this task
+  const agentProfile = await getAgentProfileForTask(taskId);
+  const agentModel = agentProfile?.model || getDefaultModel();
+  const agentTimeout = agentProfile?.sandbox?.timeout || 300;
+  const agentSystemPrompt = agentProfile?.prompt || '';
+
   // Get output folder from task or use default
   const outputFolder = task.outputFolder || '~/Desktop/Claw Creations/outputs';
   const expectedOutput = task.expectedOutput ? `\n**Expected Deliverable:** ${task.expectedOutput}` : '';
 
-  // Build execution prompt
-  const executionPrompt = `You are an execution agent working on a task.
+  // Build context paths section
+  const contextPathsSection = (task.contextPaths && task.contextPaths.length > 0)
+    ? `\n**Context Files/Folders (read these for reference):**\n${task.contextPaths.map(p => `- ${p}`).join('\n')}`
+    : '';
 
+  // Build agent identity section
+  const agentIdentity = agentProfile
+    ? `\n**Agent Identity:**
+- Name: ${agentProfile.name}
+- Role: ${agentProfile.type}
+- Description: ${agentProfile.description || 'N/A'}
+- Model: ${agentModel}`
+    : '';
+
+  // Build time constraint
+  const timeMinutes = Math.round(agentTimeout / 60);
+  const timeConstraint = `\n**Time Constraint:** You have ${agentTimeout} seconds (${timeMinutes} minutes) to complete this step. Budget your time accordingly.`;
+
+  // Build system prompt prefix
+  const systemPromptSection = agentSystemPrompt
+    ? `${agentSystemPrompt}\n\n---\n\n`
+    : '';
+
+  // Build execution prompt
+  const executionPrompt = `${systemPromptSection}You are an execution agent working on a task.
+${agentIdentity}
 **Task:** ${task.title}
 **Description:** ${task.description || 'No description'}${expectedOutput}
 **Step ${step.number} of ${allSteps.length}:** ${step.title}
 **Agent Type:** ${step.agent}
-
+${timeConstraint}
 **Instructions:**
 ${step.instructions}
+${contextPathsSection}
 
 **Previous Steps Completed:**
 ${allSteps.filter(s => s.number < step.number && s.status === 'complete').map(s => `- Step ${s.number}: ${s.title}`).join('\n') || 'None'}
 
 **Your Job:**
-1. Execute this step completely
+1. Execute this step completely — do not defer work or leave tasks incomplete
 2. Create any necessary files in ${outputFolder}/
 3. If this involves GitHub, create the repo and push files
 4. Report what you accomplished
@@ -3487,25 +3552,25 @@ Notes: [any important info]
 - After GitHub repo: \`curl -s -o /dev/null -w "%{http_code}" https://github.com/intelligentclawmachine/repo\` → must return 200
 
 Begin execution now.`;
-  
+
   try {
     console.log(`🤖 Spawning agent for Step ${step.number}...`);
-    
+    console.log(`   Agent: ${agentProfile?.name || 'default'} | Model: ${agentModel} | Timeout: ${agentTimeout}s`);
+
     // Create a subagent session via OpenClaw
-    // This uses the sessions_spawn mechanism
-    const spawnResult = await spawnSubAgent(execId, executionPrompt, taskId, step.number, step.agent);
-    
+    const spawnResult = await spawnSubAgent(execId, executionPrompt, taskId, step.number, step.agent, agentModel, agentTimeout);
+
     // Parse the agent response
     const result = parseAgentResponse(spawnResult.output || '');
-    
+
     // Also get files and URLs directly from spawnSubAgent result
     const files = spawnResult.files || result.files || [];
     const urls = spawnResult.urls || result.urls || [];
-    
+
     console.log(`✅ Agent completed Step ${step.number}: ${result.result}`);
     if (files.length) console.log(`   📁 Files: ${files.join(', ')}`);
     if (urls.length) console.log(`   🔗 URLs: ${urls.join(', ')}`);
-    
+
     return {
       success: true,
       result: result.result,
@@ -3514,9 +3579,9 @@ Begin execution now.`;
       response: spawnResult.output,
       model: spawnResult.model,
       tokensUsed: spawnResult.tokensUsed,
-      prompt: executionPrompt // Include the prompt for reporting
+      prompt: executionPrompt
     };
-    
+
   } catch (err) {
     console.error(`❌ Agent failed Step ${step.number}:`, err.message);
     return {
@@ -3532,48 +3597,45 @@ Begin execution now.`;
  * Spawn a subagent to execute a step
  * This simulates agent execution and creates actual output files
  */
-async function spawnSubAgent(execId, prompt, taskId, stepNumber, agentType = 'auto') {
+async function spawnSubAgent(execId, prompt, taskId, stepNumber, agentType = 'auto', model = null, timeoutSeconds = null) {
   const promptPath = path.join(CONFIG.OUTPUTS_DIR, `.prompt-${execId}.txt`);
-  
+
   // Write prompt to file for reference
   await fs.writeFile(promptPath, prompt);
-  
-  console.log(`   🤖 Spawning REAL agent for Step ${stepNumber}...`);
-  
-  // Use Kimi K2.5 for all agents
-  const model = 'openrouter/moonshotai/kimi-k2.5';
-  
-  // Get task info for output path
-  const tasks = await getTasks();
-  const task = tasks.find(t => t.id === taskId);
+
+  // Use provided model or fall back to default from config
+  const resolvedModel = model || getDefaultModel();
+  const resolvedTimeout = timeoutSeconds || 300;
+
+  console.log(`   🤖 Spawning agent for Step ${stepNumber} | Model: ${resolvedModel} | Timeout: ${resolvedTimeout}s`);
+
   const outputPath = path.join(CONFIG.OUTPUTS_DIR, `step-${stepNumber}-output-${Date.now()}.txt`);
-  
+
   try {
-    // PRODUCTION: Use real agent via spawnAgentWithResult
     const agentResult = await spawnAgentWithResult({
       task: prompt,
       outputPath: outputPath,
-      model: model,
-      timeoutSeconds: 300, // 5 minutes per step
+      model: resolvedModel,
+      timeoutSeconds: resolvedTimeout,
       agentType: agentType
     });
-    
-    console.log(`   ✅ Real agent completed Step ${stepNumber}: ${agentResult.success ? 'SUCCESS' : 'FAILED'}`);
-    
+
+    console.log(`   ✅ Agent completed Step ${stepNumber}: ${agentResult.success ? 'SUCCESS' : 'FAILED'}`);
+
     if (!agentResult.success) {
       throw new Error(agentResult.error || 'Agent execution failed');
     }
-    
+
     return {
       output: agentResult.output,
       files: agentResult.files,
       urls: agentResult.urls,
-      model: model,
+      model: resolvedModel,
       tokensUsed: agentResult.tokensUsed || 0
     };
-    
+
   } catch (err) {
-    console.error(`   ❌ Real agent failed Step ${stepNumber}:`, err.message);
+    console.error(`   ❌ Agent failed Step ${stepNumber}:`, err.message);
     throw err;
   }
 }
@@ -3757,7 +3819,7 @@ async function executePlanStep(taskId, stepNumber, steps, execId) {
   
   // Broadcast progress
   const progress = Math.round(((stepNumber - 0.5) / steps.length) * 100);
-  broadcastUpdate('execution-progress', { taskId, stepNumber, progress, status: 'in-progress' });
+  broadcastUpdate('execution-progress', { taskId, stepNumber, progress, status: 'in-progress', stepTitle: step.title });
   
   // Log step start
   await appendLog(taskId, {
@@ -3770,20 +3832,34 @@ async function executePlanStep(taskId, stepNumber, steps, execId) {
   
   console.log(`▶️ Step ${stepNumber}: ${step.title} (${step.agent})`);
   
-  // Update execution session with model info
+  // Update execution session with model info and step title
   const execSession = executionSessions.get(execId);
+  const agentProfile = await getAgentProfileForTask(taskId);
+  const modelDisplay = getModelDisplayName(agentProfile?.model || getDefaultModel());
+
   if (execSession) {
-    execSession.currentStepModel = getModelForAgentType(step.agent);
+    execSession.currentStepModel = modelDisplay;
+    execSession.currentStepTitle = step.title;
     execSession.currentStepTokens = 0;
     executionSessions.set(execId, execSession);
-    
+
+    // Also update activeSessions with currentStepTitle
+    for (const [sessionId, activeSession] of activeSessions) {
+      if (activeSession.taskId === taskId && activeSession.type === 'execution') {
+        activeSession.currentStepTitle = step.title;
+        activeSession.currentStepModel = modelDisplay;
+        break;
+      }
+    }
+
     // Broadcast model update to frontend
     broadcastUpdate('step-model-update', {
       execId,
       taskId,
       stepNumber,
-      model: execSession.currentStepModel,
-      agent: step.agent
+      model: modelDisplay,
+      agent: step.agent,
+      stepTitle: step.title
     });
   }
   
@@ -3851,7 +3927,8 @@ async function executePlan(taskId, task) {
     type: 'execution',
     status: 'executing',
     startedAt: new Date().toISOString(),
-    currentStep: 'Starting execution...'
+    currentStep: 'Starting execution...',
+    currentStepTitle: ''
   });
   await persistActiveSessions();
   
@@ -3890,16 +3967,21 @@ async function runPlanExecution(taskId, execId) {
   const tasks = await getTasks();
   const task = tasks.find(t => t.id === taskId);
   
+  // Look up agent profile for this task
+  const agentProfile = task?.agentId ? (await loadAgents()).find(a => a.id === task.agentId) : null;
+  const resolvedModel = agentProfile?.model || getDefaultModel();
+
   // Create execution session record
-  const execSession = { 
+  const execSession = {
     id: execId,
-    taskId, 
+    taskId,
     taskTitle: task?.title || 'Unknown',
     agentType: task?.agentType || 'auto',
-    model: 'openrouter/moonshotai/kimi-k2.5',
+    model: resolvedModel,
     type: 'execution',
     stepsTotal: steps.length,
     stepsCompleted: 0,
+    currentStepTitle: '',
     startedAt: new Date().toISOString(),
     status: 'executing'
   };
@@ -4320,12 +4402,16 @@ PLAN_COMPLETE
 Estimated total time: {X} minutes
 Confidence: {High|Medium|Low}`;
 
-      // Execute planning agent
+      // Execute planning agent — use agent profile model if available
+      const planAgentProfile = await getAgentProfileForTask(taskId);
+      const planModel = planAgentProfile?.model || getDefaultModel();
+      const planTimeout = planAgentProfile?.sandbox?.timeout || 300;
+
       const planResult = await spawnAgentWithResult({
         task: planningPrompt,
         outputPath: planOutputPath,
-        model: 'openrouter/moonshotai/kimi-k2.5',
-        timeoutSeconds: 300,
+        model: planModel,
+        timeoutSeconds: planTimeout,
         agentType: 'planner'
       });
       
@@ -4662,6 +4748,33 @@ app.post('/api/v1/utils/pick-folder', async (req, res) => {
   }
 });
 
+// POST /api/v1/utils/pick-file - Open native macOS file picker
+app.post('/api/v1/utils/pick-file', async (req, res) => {
+  try {
+    const { currentPath } = req.body || {};
+    const defaultDir = currentPath
+      ? currentPath.replace(/^~/, process.env.HOME)
+      : path.join(process.env.HOME, 'Desktop');
+
+    const { execSync } = require('child_process');
+    const script = `osascript -e 'set theFile to choose file with prompt "Select Context File" default location POSIX file "${defaultDir}"' -e 'return POSIX path of theFile'`;
+    const result = execSync(script, { timeout: 60000, encoding: 'utf-8' }).trim();
+
+    const homePath = process.env.HOME;
+    const displayPath = result.startsWith(homePath)
+      ? '~' + result.slice(homePath.length)
+      : result;
+
+    res.json({ success: true, path: displayPath });
+  } catch (err) {
+    if (err.status === 1 || err.message?.includes('User canceled')) {
+      return res.json({ success: false, cancelled: true });
+    }
+    console.error('Error opening file picker:', err);
+    res.status(500).json({ error: 'Failed to open file picker' });
+  }
+});
+
 // POST /api/v1/utils/open-in-finder - Open a path in macOS Finder
 app.post('/api/v1/utils/open-in-finder', async (req, res) => {
   try {
@@ -4696,6 +4809,417 @@ app.post('/api/v1/utils/open-in-finder', async (req, res) => {
     res.status(500).json({ error: 'Failed to open in Finder' });
   }
 });
+
+// ============================================
+// AGENT PROFILES CRUD (Step 1)
+// ============================================
+
+const AGENT_PROFILES_FILE = path.join(process.env.HOME, '.openclaw', 'workspace', 'agent-profiles.json');
+const AGENT_STORAGE_DIR = path.join(process.env.HOME, '.openclaw', 'agents');
+
+const AGENT_PROFILE_TEMPLATE = {
+  id: '',
+  name: '',
+  type: 'custom',
+  model: 'anthropic/claude-sonnet-4-5',
+  prompt: '',
+  description: '',
+  icon: '🤖',
+  tags: [],
+  metadata: {
+    usageCount: 0,
+    lastUsedAt: null
+  },
+  sandbox: {
+    networkAccess: 'full',
+    filesystemAccess: { mode: 'workspace-only' },
+    timeout: 300
+  },
+  tools: {
+    mode: 'all',
+    allowList: [],
+    denyList: []
+  },
+  identity: {
+    displayName: 'Agent',
+    emoji: '🤖',
+    color: '#4A90D9'
+  },
+  workspace: path.join(process.env.HOME, '.openclaw', 'workspace'),
+  agentDir: '',
+  attachedFiles: [],
+  createdAt: '',
+  updatedAt: '',
+  isDefault: false
+};
+
+// Default agent presets removed — users create their own via Agent Manager
+
+function slugifyAgentName(name, id = '') {
+  const slugBase = ((name || 'agent').toLowerCase() || 'agent')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '') || 'agent';
+  const hash = id ? id.slice(0, 6) : uuidv4().slice(0, 6);
+  return `${slugBase}-${hash}`;
+}
+
+async function ensureAgentStorageDir() {
+  await fs.mkdir(AGENT_STORAGE_DIR, { recursive: true });
+}
+
+async function ensureAgentWorkspaceDir(agentDir) {
+  if (!agentDir) return;
+  await fs.mkdir(agentDir, { recursive: true });
+  await fs.mkdir(path.join(agentDir, 'files'), { recursive: true });
+}
+
+function createAgentRecord(payload = {}) {
+  const now = new Date().toISOString();
+  const template = JSON.parse(JSON.stringify(AGENT_PROFILE_TEMPLATE));
+  return {
+    ...template,
+    ...payload,
+    id: payload.id || uuidv4(),
+    name: payload.name?.trim() || template.name || 'Unnamed Agent',
+    description: payload.description || template.description,
+    prompt: payload.prompt || template.prompt,
+    type: payload.type || template.type,
+    icon: payload.icon || template.icon,
+    model: payload.model || template.model,
+    workspace: payload.workspace || template.workspace,
+    tags: Array.isArray(payload.tags) ? payload.tags : template.tags,
+    metadata: { ...template.metadata, ...(payload.metadata || {}) },
+    sandbox: { ...template.sandbox, ...(payload.sandbox || {}) },
+    tools: { ...template.tools, ...(payload.tools || {}) },
+    identity: {
+      ...template.identity,
+      ...(payload.identity || {}),
+      displayName: payload.identity?.displayName || payload.name || template.identity.displayName,
+      emoji: payload.identity?.emoji || payload.icon || template.identity.emoji
+    },
+    attachedFiles: Array.isArray(payload.attachedFiles) ? payload.attachedFiles : template.attachedFiles,
+    isDefault: payload.isDefault || false,
+    createdAt: payload.createdAt || now,
+    updatedAt: payload.updatedAt || now,
+    agentDir: payload.agentDir || template.agentDir
+  };
+}
+
+async function loadAgents() {
+  try {
+    const raw = await fs.readFile(AGENT_PROFILES_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed?.profiles && Array.isArray(parsed.profiles)) return parsed.profiles;
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveAgents(agents) {
+  await fs.mkdir(path.dirname(AGENT_PROFILES_FILE), { recursive: true });
+  await fs.writeFile(
+    AGENT_PROFILES_FILE,
+    JSON.stringify({ version: 1, lastUpdated: new Date().toISOString(), profiles: agents }, null, 2),
+    'utf8'
+  );
+}
+
+async function persistAgentProfileFile(agent) {
+  if (!agent.agentDir) return;
+  await ensureAgentWorkspaceDir(agent.agentDir);
+  const profilePath = path.join(agent.agentDir, 'agent-profile.json');
+  await fs.writeFile(profilePath, JSON.stringify(agent, null, 2), 'utf8');
+}
+
+function applyFilters(profiles, query) {
+  let filtered = [...profiles];
+  if (query.search) {
+    const search = query.search.toLowerCase();
+    filtered = filtered.filter((agent) =>
+      agent.name.toLowerCase().includes(search) ||
+      agent.description?.toLowerCase().includes(search) ||
+      agent.tags?.some((tag) => tag.toLowerCase().includes(search))
+    );
+  }
+  if (query.type && query.type !== 'all') {
+    filtered = filtered.filter((agent) => agent.type === query.type);
+  }
+  if (query.tags) {
+    const required = query.tags.split(',').map((tag) => tag.trim().toLowerCase()).filter(Boolean);
+    if (required.length) {
+      filtered = filtered.filter((agent) =>
+        required.every((tag) => (agent.tags || []).map((t) => t.toLowerCase()).includes(tag))
+      );
+    }
+  }
+  const sortField = query.sort || 'name';
+  const sortOrder = (query.order || 'asc').toLowerCase();
+  filtered.sort((a, b) => {
+    let left = sortField === 'usage' ? (a.metadata?.usageCount || 0) : a[sortField];
+    let right = sortField === 'usage' ? (b.metadata?.usageCount || 0) : b[sortField];
+    if (sortField === 'createdAt' || sortField === 'updatedAt') {
+      left = new Date(left).getTime() || 0;
+      right = new Date(right).getTime() || 0;
+    }
+    if (typeof left === 'string') left = left.toLowerCase();
+    if (typeof right === 'string') right = right.toLowerCase();
+    if (left === right) return 0;
+    if (sortOrder === 'desc') return left > right ? -1 : 1;
+    return left > right ? 1 : -1;
+  });
+  return filtered;
+}
+
+async function seedDefaultAgentProfiles() {
+  // Just ensure directories exist — no default presets seeded
+  await ensureAgentStorageDir();
+  return await loadAgents();
+}
+
+// GET /agents - list all agent profiles
+app.get('/api/v1/agents', async (req, res) => {
+  try {
+    const agents = await loadAgents();
+    const filtered = applyFilters(agents, req.query);
+    res.json({ agents: filtered, total: filtered.length });
+  } catch (err) {
+    console.error('Error loading agents:', err);
+    res.status(500).json({ error: 'Failed to load agents' });
+  }
+});
+
+// GET /agents/tags - unique tag list
+app.get('/api/v1/agents/tags', async (req, res) => {
+  try {
+    const agents = await loadAgents();
+    const tags = [...new Set(agents.flatMap((a) => a.tags || []))].sort();
+    res.json({ tags });
+  } catch (err) {
+    console.error('Error loading agent tags:', err);
+    res.status(500).json({ error: 'Failed to load tags' });
+  }
+});
+
+// GET /agents/:id - single profile
+app.get('/api/v1/agents/:id', async (req, res) => {
+  try {
+    const agents = await loadAgents();
+    const agent = agents.find((a) => a.id === req.params.id);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    res.json(agent);
+  } catch (err) {
+    console.error('Error fetching agent:', err);
+    res.status(500).json({ error: 'Failed to load agent' });
+  }
+});
+
+// POST /agents - create new agent
+app.post('/api/v1/agents', async (req, res) => {
+  try {
+    const profile = createAgentRecord(req.body);
+    const slug = slugifyAgentName(profile.name, profile.id);
+    profile.agentDir = path.join(AGENT_STORAGE_DIR, slug);
+    await ensureAgentWorkspaceDir(profile.agentDir);
+    const agents = await loadAgents();
+    agents.push(profile);
+    await Promise.all([saveAgents(agents), persistAgentProfileFile(profile)]);
+    broadcastUpdate('agent-updated');
+    res.status(201).json(profile);
+  } catch (err) {
+    console.error('Error creating agent profile:', err);
+    res.status(500).json({ error: 'Failed to create agent profile' });
+  }
+});
+
+// PATCH /agents/:id - update profile
+app.patch('/api/v1/agents/:id', async (req, res) => {
+  try {
+    const agents = await loadAgents();
+    const idx = agents.findIndex((a) => a.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: 'Agent not found' });
+    const updated = {
+      ...agents[idx],
+      ...req.body,
+      updatedAt: new Date().toISOString(),
+      metadata: { ...agents[idx].metadata, ...(req.body.metadata || {}) },
+      tags: req.body.tags || agents[idx].tags || [],
+      sandbox: { ...agents[idx].sandbox, ...(req.body.sandbox || {}) },
+      tools: { ...agents[idx].tools, ...(req.body.tools || {}) },
+      identity: { ...agents[idx].identity, ...(req.body.identity || {}) }
+    };
+    agents[idx] = updated;
+    await Promise.all([saveAgents(agents), persistAgentProfileFile(updated)]);
+    broadcastUpdate('agent-updated');
+    res.json(updated);
+  } catch (err) {
+    console.error('Error updating agent profile:', err);
+    res.status(500).json({ error: 'Failed to update agent profile' });
+  }
+});
+
+// DELETE /agents/:id - remove agent profile
+app.delete('/api/v1/agents/:id', async (req, res) => {
+  try {
+    let agents = await loadAgents();
+    const idx = agents.findIndex((a) => a.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: 'Agent not found' });
+    agents.splice(idx, 1);
+    await saveAgents(agents);
+    broadcastUpdate('agent-updated');
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting agent profile:', err);
+    res.status(500).json({ error: 'Failed to delete agent profile' });
+  }
+});
+
+// POST /agents/:id/duplicate - clone profile
+app.post('/api/v1/agents/:id/duplicate', async (req, res) => {
+  try {
+    const agents = await loadAgents();
+    const source = agents.find((a) => a.id === req.params.id);
+    if (!source) return res.status(404).json({ error: 'Agent not found' });
+    const duplicate = createAgentRecord({ ...source, name: req.body.name || `${source.name} (Copy)` });
+    const slug = slugifyAgentName(duplicate.name, duplicate.id);
+    duplicate.agentDir = path.join(AGENT_STORAGE_DIR, slug);
+    await ensureAgentWorkspaceDir(duplicate.agentDir);
+    duplicate.metadata = { usageCount: 0, lastUsedAt: null };
+    duplicate.attachedFiles = [];
+    agents.push(duplicate);
+    await Promise.all([saveAgents(agents), persistAgentProfileFile(duplicate)]);
+    broadcastUpdate('agent-updated');
+    res.status(201).json(duplicate);
+  } catch (err) {
+    console.error('Error duplicating agent profile:', err);
+    res.status(500).json({ error: 'Failed to duplicate agent profile' });
+  }
+});
+
+// POST /agents/:id/set-default
+app.post('/api/v1/agents/:id/set-default', async (req, res) => {
+  try {
+    const agents = await loadAgents();
+    const idx = agents.findIndex((a) => a.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: 'Agent not found' });
+    agents.forEach((agent) => { agent.isDefault = false; });
+    agents[idx].isDefault = true;
+    agents[idx].updatedAt = new Date().toISOString();
+    await Promise.all([saveAgents(agents), persistAgentProfileFile(agents[idx])]);
+    broadcastUpdate('agent-updated');
+    res.json(agents[idx]);
+  } catch (err) {
+    console.error('Error setting default agent:', err);
+    res.status(500).json({ error: 'Failed to set default agent' });
+  }
+});
+
+// POST /agents/import - import JSON definition
+app.post('/api/v1/agents/import', async (req, res) => {
+  try {
+    const agents = await loadAgents();
+    const imported = createAgentRecord(req.body);
+    const slug = slugifyAgentName(imported.name, imported.id);
+    imported.agentDir = path.join(AGENT_STORAGE_DIR, slug);
+    await ensureAgentWorkspaceDir(imported.agentDir);
+    agents.push(imported);
+    await Promise.all([saveAgents(agents), persistAgentProfileFile(imported)]);
+    broadcastUpdate('agent-updated');
+    res.status(201).json(imported);
+  } catch (err) {
+    console.error('Error importing agent profile:', err);
+    res.status(500).json({ error: 'Failed to import agent profile' });
+  }
+});
+
+// GET /agents/:id/export - return profile data (without metadata)
+app.get('/api/v1/agents/:id/export', async (req, res) => {
+  try {
+    const agents = await loadAgents();
+    const agent = agents.find((a) => a.id === req.params.id);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    const { metadata, attachedFiles, ...exportData } = agent;
+    res.json(exportData);
+  } catch (err) {
+    console.error('Error exporting agent profile:', err);
+    res.status(500).json({ error: 'Failed to export agent profile' });
+  }
+});
+
+// GET /agents/:id/stats
+app.get('/api/v1/agents/:id/stats', async (req, res) => {
+  try {
+    const agents = await loadAgents();
+    const agent = agents.find((a) => a.id === req.params.id);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    res.json({ id: agent.id, name: agent.name, ...agent.metadata });
+  } catch (err) {
+    console.error('Error fetching agent stats:', err);
+    res.status(500).json({ error: 'Failed to load agent stats' });
+  }
+});
+
+// POST /agents/:id/files/attach
+app.post('/api/v1/agents/:id/files/attach', async (req, res) => {
+  try {
+    const { sourcePath } = req.body;
+    if (!sourcePath) return res.status(400).json({ error: 'sourcePath is required' });
+    const agents = await loadAgents();
+    const idx = agents.findIndex((a) => a.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: 'Agent not found' });
+    const agent = agents[idx];
+    if (!agent.agentDir) return res.status(400).json({ error: 'Agent directory missing' });
+    const absSource = sourcePath.replace(/^~/, process.env.HOME);
+    const filesDir = path.join(agent.agentDir, 'files');
+    await ensureAgentWorkspaceDir(agent.agentDir);
+    const fileName = path.basename(absSource);
+    const destPath = path.join(filesDir, `${Date.now()}-${fileName}`);
+    await fs.copyFile(absSource, destPath);
+    const stats = await fs.stat(destPath);
+    const fileEntry = {
+      id: uuidv4(),
+      name: fileName,
+      path: destPath,
+      size: stats.size,
+      attachedAt: new Date().toISOString()
+    };
+    agent.attachedFiles = agent.attachedFiles || [];
+    agent.attachedFiles.push(fileEntry);
+    agent.updatedAt = new Date().toISOString();
+    agents[idx] = agent;
+    await Promise.all([saveAgents(agents), persistAgentProfileFile(agent)]);
+    broadcastUpdate('agent-updated');
+    res.json(fileEntry);
+  } catch (err) {
+    console.error('Error attaching file to agent:', err);
+    res.status(500).json({ error: 'Failed to attach file' });
+  }
+});
+
+// DELETE /agents/:id/files/:fileId
+app.delete('/api/v1/agents/:id/files/:fileId', async (req, res) => {
+  try {
+    const agents = await loadAgents();
+    const idx = agents.findIndex((a) => a.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: 'Agent not found' });
+    const agent = agents[idx];
+    const fileIdx = (agent.attachedFiles || []).findIndex((f) => f.id === req.params.fileId);
+    if (fileIdx === -1) return res.status(404).json({ error: 'File not found' });
+    const file = agent.attachedFiles[fileIdx];
+    try { await fs.unlink(file.path); } catch (e) {}
+    agent.attachedFiles.splice(fileIdx, 1);
+    agent.updatedAt = new Date().toISOString();
+    agents[idx] = agent;
+    await Promise.all([saveAgents(agents), persistAgentProfileFile(agent)]);
+    broadcastUpdate('agent-updated');
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error deleting attached file:', err);
+    res.status(500).json({ error: 'Failed to delete attached file' });
+  }
+});
+
 
 // ============================================
 // SPA CATCH-ALL ROUTE (for React Router)
@@ -4771,6 +5295,8 @@ async function initialize() {
     await writeJson(CONFIG.EXECUTION_QUEUE_FILE, { version: '1.0', lastUpdated: new Date().toISOString(), jobs: [] });
   }
   
+  await seedDefaultAgentProfiles();
+
   // Initialize plan storage infrastructure (Phase 1)
   await initializePlanStorage();
   
