@@ -14,8 +14,8 @@ const fs = require('fs').promises;
 async function spawnAgentWithResult({
   task,
   outputPath,
-  model = 'openrouter/moonshotai/kimi-k2.5',
-  timeoutSeconds = 300,
+  model = 'anthropic/claude-sonnet-4-5',
+  timeoutSeconds = 3600,
   agentType = 'auto'
 }) {
   const startTime = Date.now();
@@ -31,9 +31,15 @@ async function spawnAgentWithResult({
     await fs.mkdir(outputDir, { recursive: true });
     
     // Build the full prompt with instructions
+    // IMPORTANT: Tell agent to output to STDOUT only, not use write/edit tools
+    // for the final output. This avoids JSON serialization issues with large content.
     const fullPrompt = `${task}
 
 ---
+
+**CRITICAL: OUTPUT TO STDOUT ONLY**
+Output your final result as plain text to STDOUT. Do NOT use write or edit tools for the final output text.
+The system will capture your STDOUT response and handle file writing.
 
 **REQUIRED OUTPUT FORMAT:**
 You must end your response with exactly this format:
@@ -41,7 +47,7 @@ You must end your response with exactly this format:
 STEP_COMPLETE
 Result: [Detailed description of what you accomplished]
 Files Created: [List each file with full path, one per line, or "None"]
-URLs: [List each URL, one per line, or "None"]  
+URLs: [List each URL, one per line, or "None"]
 Notes: [Any important details, errors, or context]
 
 OR if you failed:
@@ -96,16 +102,47 @@ Notes: [What went wrong]
       parsed.files = verifiedFiles;
     }
     
+    // Scan output directory for files created during this agent's execution
+    try {
+      const entries = await fs.readdir(outputDir);
+      for (const entry of entries) {
+        if (entry.startsWith('.')) continue; // Skip hidden/temp files
+        const fullPath = path.join(outputDir, entry);
+        try {
+          const stat = await fs.stat(fullPath);
+          // File created/modified during this agent's run (5s buffer before start)
+          if (stat.mtimeMs >= startTime - 5000 && stat.isFile()) {
+            const tildePath = fullPath.replace(process.env.HOME, '~');
+            if (!parsed.files.includes(tildePath) && !parsed.files.includes(fullPath)) {
+              // Skip our own internal files
+              if (!entry.startsWith('step-') && !entry.startsWith('.prompt-')) {
+                parsed.files.push(tildePath);
+                console.log(`   📂 Discovered file: ${tildePath}`);
+              }
+            }
+          }
+        } catch (e) { /* stat failed, skip */ }
+      }
+    } catch (e) { /* readdir failed, non-critical */ }
+
     // Clean up prompt file
     try { await fs.unlink(promptPath); } catch (e) {}
     
-    // Success if: output file exists, or status is complete, or exit code was 0
-    const success = outputFileExists || parsed.status === 'complete' || agentResult.exitCode === 0;
+    // Success requires real evidence: completion marker, substantial output, or created files
+    const hasOutput = agentResult.output && agentResult.output.trim().length > 0;
+    const hasSubstantialOutput = agentResult.output && agentResult.output.trim().length > 200;
+    const hasCompletionMarker = parsed.status === 'complete';
+    const hasCreatedFiles = parsed.files.length > 0;
+    const success = hasCompletionMarker || hasSubstantialOutput || hasCreatedFiles;
+
+    if (!success && hasOutput) {
+      console.warn(`   ⚠️ Agent produced output (${agentResult.output.trim().length} chars) but it appears incomplete — no STEP_COMPLETE marker, output < 200 chars, no files created`);
+    }
     
     return {
       success: success,
       output: agentResult.output,
-      result: parsed.result || (outputFileExists ? 'Output file created successfully' : 'Task completed'),
+      result: parsed.result || (hasCreatedFiles ? 'Output file created successfully' : 'Task completed'),
       files: parsed.files || [],
       urls: parsed.urls || [],
       notes: parsed.notes || '',
@@ -160,25 +197,36 @@ async function runAgentViaOpenClaw({ prompt, model, timeoutSeconds, outputPath }
     };
     
     console.log(`   Executing: openclaw ${args[0]} ${args[1]} --message "..." --timeout ${timeoutSeconds}...`);
-    
+
     const proc = spawn('openclaw', args, {
-      timeout: timeoutSeconds * 1000,
       env: env
     });
-    
+
+    // Manual timeout since spawn() does not support the timeout option
+    let killed = false;
+    const timer = setTimeout(() => {
+      killed = true;
+      console.warn(`   ⏰ Agent timed out after ${timeoutSeconds}s, killing process`);
+      proc.kill('SIGTERM');
+      setTimeout(() => {
+        try { proc.kill('SIGKILL'); } catch (e) {}
+      }, 5000);
+    }, timeoutSeconds * 1000);
+
     proc.stdout.on('data', (data) => {
       const chunk = data.toString();
       outputChunks.push(chunk);
       process.stdout.write(chunk);  // Stream to console
     });
-    
+
     proc.stderr.on('data', (data) => {
       const chunk = data.toString();
       errorChunks.push(chunk);
       process.stderr.write(chunk);  // Stream errors
     });
-    
+
     proc.on('close', async (code) => {
+      clearTimeout(timer);
       const output = outputChunks.join('');
       const errors = errorChunks.join('');
       
@@ -190,20 +238,78 @@ async function runAgentViaOpenClaw({ prompt, model, timeoutSeconds, outputPath }
         // Output might be in stdout only
       }
       
-      // Parse JSON output if available
+      // Extract actual content from agent output, stripping JSON metadata envelope
       let parsedOutput = fileOutput || output;
       try {
         const jsonResult = JSON.parse(output);
+        // Handle various OpenClaw JSON response formats
         if (jsonResult.response) {
           parsedOutput = jsonResult.response;
+        } else if (jsonResult.payloads && Array.isArray(jsonResult.payloads)) {
+          // OpenClaw wraps output in payloads[].content
+          parsedOutput = jsonResult.payloads
+            .map(p => p.content || p.text || '')
+            .filter(c => c)
+            .join('\n');
+        } else if (jsonResult.content) {
+          parsedOutput = jsonResult.content;
+        } else if (jsonResult.result) {
+          parsedOutput = jsonResult.result;
         }
       } catch (e) {
-        // Not JSON, use raw output
+        // Not valid JSON — mixed content with JSON metadata embedded
+        // Before stripping, rescue content from embedded "content"/"text" fields
+        const rescuedContent = [];
+        const contentRegex = /"(?:content|text)"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+        let contentMatch;
+        while ((contentMatch = contentRegex.exec(parsedOutput)) !== null) {
+          const val = contentMatch[1]
+            .replace(/\\n/g, '\n')
+            .replace(/\\"/g, '"')
+            .replace(/\\t/g, '\t')
+            .replace(/\\\\/g, '\\');
+          // Only rescue substantial content (>100 chars), skip metadata values
+          if (val.length > 100) {
+            rescuedContent.push(val);
+          }
+        }
+
+        // Strip metadata from the original text
+        let cleaned = stripJsonMetadata(parsedOutput);
+
+        // If stripping left very little but we rescued substantial content, use it
+        if (rescuedContent.length > 0 && cleaned.length < 500) {
+          parsedOutput = rescuedContent.join('\n\n') + '\n\n' + cleaned;
+        } else {
+          parsedOutput = cleaned;
+        }
+      }
+
+      // Always strip any remaining JSON metadata as a safety net
+      const finalOutput = stripJsonMetadata(parsedOutput);
+
+      // Write captured output to file ourselves (bypass JSON serialization issues)
+      if (finalOutput && outputPath) {
+        try {
+          await fs.writeFile(outputPath, finalOutput, 'utf8');
+        } catch (writeErr) {
+          console.warn(`   ⚠️ Could not write output file: ${writeErr.message}`);
+        }
       }
       
-      const finalOutput = parsedOutput;
-      
-      if (code === 0 || finalOutput.includes('STEP_COMPLETE')) {
+      if (killed) {
+        reject(new Error(`Agent timed out after ${timeoutSeconds}s`));
+      } else if (finalOutput.includes('STEP_COMPLETE')) {
+        // STEP_COMPLETE marker is the source of truth — even if exit code is non-zero
+        resolve({
+          output: finalOutput,
+          exitCode: code,
+          tokensUsed: extractTokensFromOutput(output)
+        });
+      } else if (code === 0 && !finalOutput && !fileOutput) {
+        // Process exited cleanly but produced no output — treat as failure
+        reject(new Error('Agent exited with code 0 but produced no output (possible crash or missing binary)'));
+      } else if (code === 0) {
         resolve({
           output: finalOutput,
           exitCode: code,
@@ -215,9 +321,48 @@ async function runAgentViaOpenClaw({ prompt, model, timeoutSeconds, outputPath }
     });
     
     proc.on('error', (err) => {
+      clearTimeout(timer);
       reject(new Error(`Failed to spawn agent: ${err.message}`));
     });
   });
+}
+
+/**
+ * Strip JSON metadata blocks that OpenClaw injects into agent output.
+ * Agent responses get wrapped with payloads/meta structures containing
+ * session IDs, model info, usage stats, etc. This removes all of that.
+ */
+function stripJsonMetadata(text) {
+  if (!text) return '';
+  let cleaned = text;
+
+  // Remove everything from "mediaUrl" to the next step marker (✓) or end
+  cleaned = cleaned.replace(/",?\s*"mediaUrl"[\s\S]*?(?=✓|$)/g, '\n');
+
+  // Remove "meta": { ... } blocks (nested braces)
+  cleaned = cleaned.replace(/"meta"\s*:\s*\{[\s\S]*?\}\s*\}/g, '');
+
+  // Remove "payloads": [ ... ] blocks
+  cleaned = cleaned.replace(/"payloads"\s*:\s*\[[\s\S]*?\]\s*/g, '');
+
+  // Note: Removed overly-broad generic JSON key-value stripping patterns.
+  // The targeted mediaUrl/meta/payloads patterns above handle real OpenClaw metadata.
+
+  // Remove orphaned JSON structural characters on their own lines
+  cleaned = cleaned.replace(/^\s*[\[\]{}],?\s*$/gm, '');
+
+  // Remove empty JSON objects/arrays
+  cleaned = cleaned.replace(/\{\s*\}/g, '');
+  cleaned = cleaned.replace(/\[\s*\]/g, '');
+
+  // Clean escaped characters
+  cleaned = cleaned.replace(/\\n/g, '\n');
+  cleaned = cleaned.replace(/\\"/g, '"');
+
+  // Remove excess blank lines
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+
+  return cleaned.trim();
 }
 
 /**
@@ -291,5 +436,6 @@ function extractTokensFromOutput(output) {
 
 module.exports = {
   spawnAgentWithResult,
-  parseAgentOutput
+  parseAgentOutput,
+  stripJsonMetadata
 };

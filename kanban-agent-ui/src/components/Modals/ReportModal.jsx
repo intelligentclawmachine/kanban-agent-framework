@@ -21,9 +21,17 @@ function cleanRawText(text) {
   // Remove any remaining JSON blocks with "meta": { ... } patterns
   cleaned = cleaned.replace(/"meta"\s*:\s*\{[\s\S]*?\}\s*\}/g, '')
 
+  // Remove "payloads": [ ... ] blocks
+  cleaned = cleaned.replace(/"payloads"\s*:\s*\[[\s\S]*?\]\s*/g, '')
+
   // Remove JSON key-value artifacts that may remain
   cleaned = cleaned.replace(/"[a-zA-Z_]+"\s*:\s*(null|true|false|"[^"]*"|\d+)\s*,?/g, '')
-  cleaned = cleaned.replace(/^\s*[\[\]{}]\s*$/gm, '')
+
+  // Remove "key": [ or "key": { patterns (partial JSON starts)
+  cleaned = cleaned.replace(/"[a-zA-Z_]+"\s*:\s*[\[{]\s*/g, '')
+
+  // Remove orphaned JSON structural characters
+  cleaned = cleaned.replace(/^\s*[\[\]{}],?\s*$/gm, '')
   cleaned = cleaned.replace(/\{\s*\}/g, '')
   cleaned = cleaned.replace(/\[\s*\]/g, '')
 
@@ -60,6 +68,12 @@ function parseSummarySteps(text) {
   for (let i = 1; i < parts.length; i += 2) {
     const title = parts[i]?.trim()
     let content = (parts[i + 1] || '').trim()
+
+    // Skip steps with empty or garbage-only content (just punctuation/whitespace)
+    if (!content || /^[\s\[\]{},."':;]+$/.test(content)) {
+      steps.push({ title, description: 'Completed successfully' })
+      continue
+    }
 
     // Extract sub-fields from content
     const fields = {}

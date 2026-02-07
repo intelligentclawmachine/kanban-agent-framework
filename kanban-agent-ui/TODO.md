@@ -17,6 +17,33 @@
 | 7 | **Toast notifications** | Done | ToastProvider with success/error/info |
 | 8 | **Production build config** | Done | Vite build with code splitting |
 | 9 | **API integration (all endpoints)** | Done | Tasks, Plans, Sessions fully wired |
+| 10 | **🤖 Agent Manager** | Done | Full Agent Manager UI - see below |
+
+### Agent Manager (2026-02-06)
+
+Complete implementation of the Agent Manager product design:
+
+**Features:**
+- Grid/List view with filtering, sorting, search
+- Agent cards with type badges, model info, usage stats
+- Create/Edit modal with 7 collapsible sections:
+  - Basic Info (name, type, icon, description)
+  - Model Selection (grouped by provider)
+  - Behavior (prompt editor with templates)
+  - Environment (workspace, sandbox settings)
+  - Tools (allow/deny lists with presets)
+  - Identity (display name, color)
+  - Tags (auto-complete input)
+- Quick actions: Edit, Duplicate, Delete, Set Default
+- Empty state with Pizza Planet theme
+- View switcher in header (Tasks ↔ Agents)
+
+**Files Added:**
+- `src/types/agent.js` - Type definitions
+- `src/utils/agentConstants.js` - Constants, presets, models
+- `src/api/agents.js` - API layer
+- `src/hooks/useAgents.js` - React Query hooks
+- `src/components/AgentManager/` - 8 new components
 
 ---
 
@@ -45,6 +72,8 @@
 ```
 src/
   components/
+    AgentManager/   - AgentManagerPage, AgentManagerHeader, AgentCard, AgentListRow, 
+                      AgentCreator, EmptyState (NEW)
     Header/         - Header, FilterBar
     KanbanBoard/    - KanbanBoard, KanbanColumn, TaskCard
     Modals/         - TaskModal, PlanReviewModal, SessionViewModal, ReportModal, TaskDetailModal
@@ -52,6 +81,7 @@ src/
     Sessions/       - ActiveSessions, PastSessions, SessionCard, PastSessionCard
     Toast/          - ToastContext (provider + hook)
   hooks/
+    useAgents.js    - Agent CRUD with React Query (NEW)
     useTasks.js     - CRUD operations with React Query
     usePlans.js     - Plan operations (planning, approve, execute)
     useSessions.js  - Active/history sessions, kill
@@ -60,6 +90,7 @@ src/
     useArchive.js   - Archive operations
     useEvents.js    - Event stream
   api/
+    agents.js       - Agent endpoints (NEW)
     client.js       - Axios instance with interceptors
     tasks.js        - Task endpoints
     plans.js        - Plan endpoints
@@ -67,8 +98,14 @@ src/
     reports.js      - Report endpoints
     archive.js      - Archive endpoints
     events.js       - Event endpoints
+  types/
+    agent.js        - Agent type definitions (NEW)
   store/
-    uiStore.js      - Zustand store for modal state, filters
+    uiStore.js      - Zustand store for modal state, filters, view state
+  utils/
+    agentConstants.js - Agent types, models, presets, tools (NEW)
+    constants.js    - Status, priorities, agent types
+    formatters.js   - Date/string formatters
 ```
 
 ### Key Features
