@@ -2412,6 +2412,13 @@
       border: 1px solid var(--color-border);
     }
 
+    .section-subtitle {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin: -4px 0 8px 0;
+      opacity: 0.8;
+    }
+
     .sessions-page-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -2478,4 +2485,102 @@
     .field-warning {
       border-color: var(--color-warning) !important;
       box-shadow: 0 0 0 2px rgba(255, 179, 71, 0.25);
+    }
+
+    /* ============================================
+       REPORTS LIST VIEW
+       ============================================ */
+    .reports-list {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .report-list-row {
+      display: flex;
+      align-items: center;
+      gap: var(--spacing-m);
+      padding: 12px 16px;
+      background: var(--color-panel);
+      border: 1px solid var(--color-border);
+      border-left: 3px solid var(--color-success);
+      border-radius: var(--radius-s);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .report-list-row:hover {
+      background: var(--color-panel-soft);
+      border-color: var(--color-primary);
+    }
+
+    .report-list-row--error {
+      border-left-color: var(--color-error);
+      background: rgba(244, 67, 54, 0.04);
+    }
+
+    .report-list-row--error:hover {
+      background: rgba(244, 67, 54, 0.08);
+    }
+
+    .report-list-status {
+      font-size: 16px;
+      flex-shrink: 0;
+      width: 24px;
+      text-align: center;
+    }
+
+    .report-list-title {
+      flex: 1;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--color-text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+    }
+
+    .report-list-stats {
+      display: flex;
+      gap: 16px;
+      flex-shrink: 0;
+    }
+
+    .report-list-stat {
+      display: flex;
+      align-items: baseline;
+      gap: 3px;
+    }
+
+    .report-list-stat-value {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--color-text);
+    }
+
+    .report-list-stat-label {
+      font-size: 11px;
+      color: var(--color-text-muted);
+    }
+
+    .report-list-meta {
+      display: flex;
+      gap: 12px;
+      flex-shrink: 0;
+      font-size: 12px;
+      color: var(--color-text-muted);
+    }
+
+    .report-list-agent {
+      background: var(--color-panel-soft);
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+    }
+
+    .report-list-actions {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
     }

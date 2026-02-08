@@ -4627,6 +4627,33 @@ app.get('/api/v1/sessions/active', async (req, res) => {
   }
 });
 
+// GET /sessions/openclaw - Get OpenClaw native sessions from the gateway
+app.get('/api/v1/sessions/openclaw', async (req, res) => {
+  try {
+    const activeMinutes = parseInt(req.query.active) || 0;
+    const args = ['sessions', '--json'];
+    if (activeMinutes > 0) args.push('--active', String(activeMinutes));
+
+    const { execFile } = require('child_process');
+    const result = await new Promise((resolve, reject) => {
+      execFile('openclaw', args, { timeout: 10000 }, (err, stdout, stderr) => {
+        if (err) return reject(err);
+        resolve(stdout);
+      });
+    });
+
+    const parsed = JSON.parse(result);
+    res.json({
+      sessions: parsed.sessions || [],
+      count: parsed.count || 0,
+      activeMinutes: parsed.activeMinutes || null,
+    });
+  } catch (err) {
+    console.error('Error getting OpenClaw sessions:', err.message);
+    res.json({ sessions: [], count: 0, error: err.message });
+  }
+});
+
 // GET /sessions/history - Get past completed sessions
 app.get('/api/v1/sessions/history', async (req, res) => {
   try {

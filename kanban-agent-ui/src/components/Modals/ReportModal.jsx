@@ -1,5 +1,7 @@
 import React from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useUIStore } from '../../store/uiStore'
+import { useUpdateTask } from '../../hooks/useTasks'
 import client from '../../api/client'
 import './ReportModal.css'
 
@@ -126,6 +128,8 @@ function openInFinder(filePath) {
 
 function ReportModal() {
   const { reportModalOpen, reportModalData, closeReportModal } = useUIStore()
+  const updateTask = useUpdateTask()
+  const queryClient = useQueryClient()
 
   if (!reportModalOpen || !reportModalData) return null
 
@@ -265,6 +269,28 @@ function ReportModal() {
             ))
           )}
         </div>
+
+        {report.taskId && (
+          <div className="detail-section" style={{ marginTop: '16px' }}>
+            <button
+              className="btn btn-small btn-primary"
+              type="button"
+              onClick={() => {
+                updateTask.mutate(
+                  { id: report.taskId, updates: { status: 'backlog', executionStatus: null, completionSummary: null } },
+                  {
+                    onSuccess: () => {
+                      queryClient.invalidateQueries({ queryKey: ['reports'] })
+                      closeReportModal()
+                    },
+                  }
+                )
+              }}
+            >
+              Return to Board
+            </button>
+          </div>
+        )}
 
         <div className="detail-section" style={{ marginTop: '16px', fontSize: '12px', color: 'var(--text-secondary)' }}>
           <div>Created: {new Date(report.created).toLocaleString()}</div>

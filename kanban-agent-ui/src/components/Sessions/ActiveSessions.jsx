@@ -4,7 +4,7 @@ import SessionCard from './SessionCard'
 import './ActiveSessions.css'
 
 function ActiveSessions() {
-  const { data, isLoading, refetch } = useActiveSessions()
+  const { data, isLoading } = useActiveSessions()
   const sessions = data?.sessions || []
 
   return (
@@ -12,9 +12,6 @@ function ActiveSessions() {
       <div className="section-header">
         <h2>🤖 Active Agents</h2>
         <span className="agent-count" id="activeAgentCount">{sessions.length}</span>
-        <button className="btn btn-small btn-secondary" type="button" onClick={() => refetch()}>
-          🔄 Refresh
-        </button>
       </div>
       <div className="horizontal-agent-list" id="horizontalAgentList">
         {isLoading ? (

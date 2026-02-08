@@ -1,14 +1,11 @@
 import React from 'react'
 import { useUIStore } from '../../store/uiStore'
-import { useTasks } from '../../hooks/useTasks'
-
 function GlobalHeader() {
   const activeView = useUIStore((state) => state.activeView)
   const setActiveView = useUIStore((state) => state.setActiveView)
   const searchQuery = useUIStore((state) => state.searchQuery)
   const setSearchQuery = useUIStore((state) => state.setSearchQuery)
   const openTaskModal = useUIStore((state) => state.openTaskModal)
-  const { refetch } = useTasks()
 
   const navButtons = [
     { mode: 'kanban', label: 'Kanban' },
@@ -21,7 +18,7 @@ function GlobalHeader() {
   return (
     <header className="global-header">
       <div className="brand-group">
-        <div className="brand-pill">Kanban Agent</div>
+        <div className="brand-pill">Spawning Portal</div>
         <div className="view-toggle">
           {navButtons.map((btn) => (
             <button
@@ -55,9 +52,6 @@ function GlobalHeader() {
       </div>
 
       <div className="header-actions">
-        <button type="button" className="ghost-button" onClick={() => refetch()}>
-          Refresh
-        </button>
         <button type="button" className="primary-button" onClick={() => openTaskModal()}>
           + New Task
         </button>

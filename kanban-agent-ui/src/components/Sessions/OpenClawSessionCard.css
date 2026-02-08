@@ -1,0 +1,104 @@
+/* Styles inherited from global index.css */
+
+.openclaw-session-card {
+  background: var(--bg-tertiary);
+  border-radius: 12px;
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  border-left: 4px solid var(--text-secondary);
+  transition: all 0.2s;
+}
+
+.openclaw-session-card.oc-active {
+  border-left-color: #f97316;
+  box-shadow: 0 0 12px rgba(249, 115, 22, 0.12);
+}
+
+.openclaw-session-card.oc-idle {
+  border-left-color: var(--border-color);
+  opacity: 0.75;
+}
+
+.openclaw-session-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.oc-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.oc-kind {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.oc-pulse {
+  font-size: 12px;
+}
+
+.oc-pulse-live {
+  animation: oc-glow 1.5s ease-in-out infinite;
+}
+
+@keyframes oc-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.oc-card-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 4px;
+}
+
+.oc-card-model {
+  font-size: 11px;
+  color: var(--color-primary);
+  font-family: var(--font-mono, monospace);
+  margin-bottom: 8px;
+}
+
+.oc-card-stats {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.oc-ctx-pct {
+  font-variant-numeric: tabular-nums;
+}
+
+.oc-card-bar {
+  height: 4px;
+  background: var(--bg-secondary);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.oc-ctx-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #f97316, #ef4444);
+  border-radius: 2px;
+  transition: width 0.5s ease;
+}
+
+.oc-card-age {
+  font-size: 10px;
+  color: var(--text-secondary);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}

@@ -9,4 +9,8 @@ export const sessionsApi = {
     const params = after ? `?after=${encodeURIComponent(after)}` : ''
     return client.get(`/sessions/${id}/thoughts${params}`).then((res) => res.data)
   },
+  getOpenClaw: (activeMinutes) => {
+    const params = activeMinutes ? `?active=${activeMinutes}` : ''
+    return client.get(`/sessions/openclaw${params}`).then((res) => res.data)
+  },
 }

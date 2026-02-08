@@ -5,7 +5,7 @@ import client from '../../api/client'
 import './ReportsBar.css'
 
 function ReportsBar() {
-  const { data, refetch } = useReports()
+  const { data } = useReports()
   const reports = data?.reports || []
   const openReportModal = useUIStore((state) => state.openReportModal)
   const toggleArchive = useUIStore((state) => state.toggleArchive)
@@ -20,9 +20,6 @@ function ReportsBar() {
           </span>
         </div>
         <div className="done-actions">
-          <button className="btn btn-small btn-secondary" type="button" onClick={() => refetch()}>
-            🔄 Refresh
-          </button>
           <button className="btn btn-small btn-secondary" type="button" onClick={toggleArchive}>📦 Archive</button>
           <button className="btn btn-small btn-secondary" type="button">🗑️ Clear All</button>
         </div>

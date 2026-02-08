@@ -4,7 +4,7 @@ import PastSessionCard from './PastSessionCard'
 import './PastSessions.css'
 
 function PastSessions() {
-  const { data, isLoading, refetch } = useSessionHistory(10)
+  const { data, isLoading } = useSessionHistory(10)
   const sessions = data?.sessions || []
   const totals = data?.totals || {}
 
@@ -13,9 +13,6 @@ function PastSessions() {
       <div className="section-header">
         <h2>📊 Past Sessions</h2>
         <span className="session-count" id="horizontalSessionCount">{sessions.length}</span>
-        <button className="btn btn-small btn-secondary" type="button" onClick={() => refetch()}>
-          🔄 Refresh
-        </button>
       </div>
       <div className="horizontal-session-list" id="horizontalSessionList">
         {isLoading ? (

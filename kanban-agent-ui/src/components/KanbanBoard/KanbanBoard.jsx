@@ -17,7 +17,6 @@ import TaskCard from './TaskCard'
 import './KanbanBoard.css'
 
 function KanbanBoard() {
-  const filterPriority = useUIStore((state) => state.filterPriority)
   const searchQuery = useUIStore((state) => state.searchQuery)
   const { data, isLoading, error } = useTasks()
   const moveTask = useMoveTask()
@@ -32,9 +31,6 @@ function KanbanBoard() {
 
   const filteredTasks = React.useMemo(() => {
     let current = tasks.filter((task) => task.status !== 'done')
-    if (filterPriority !== 'all') {
-      current = current.filter((task) => task.priority === filterPriority)
-    }
     if (searchQuery) {
       const query = searchQuery.toLowerCase()
       current = current.filter(
@@ -42,7 +38,7 @@ function KanbanBoard() {
       )
     }
     return current
-  }, [tasks, filterPriority, searchQuery])
+  }, [tasks, searchQuery])
 
   const tasksByStatus = React.useMemo(() => {
     return STATUS_ORDER.reduce((acc, status) => {

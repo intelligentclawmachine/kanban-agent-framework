@@ -33,9 +33,6 @@ export const useUIStore = create((set) => ({
   archiveOpen: false,
   toggleArchive: () => set((state) => ({ archiveOpen: !state.archiveOpen })),
 
-  filterPriority: 'all',
-  setFilterPriority: (priority) => set({ filterPriority: priority }),
-
   searchQuery: '',
   setSearchQuery: (query) => set({ searchQuery: query }),
 

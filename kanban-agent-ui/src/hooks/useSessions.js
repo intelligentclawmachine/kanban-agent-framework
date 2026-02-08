@@ -27,6 +27,15 @@ export function useKillSession() {
   })
 }
 
+export function useOpenClawSessions() {
+  return useQuery({
+    queryKey: ['sessions', 'openclaw'],
+    queryFn: () => sessionsApi.getOpenClaw(),
+    refetchInterval: 15000,
+    staleTime: 10000,
+  })
+}
+
 export function useSessionThoughts(sessionId, enabled = true) {
   return useQuery({
     queryKey: ['sessions', 'thoughts', sessionId],

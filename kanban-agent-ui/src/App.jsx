@@ -3,7 +3,6 @@ import { useWebSocket } from './hooks/useWebSocket'
 import { useUIStore } from './store/uiStore'
 import GlobalHeader from './components/dashboard/GlobalHeader'
 import MetricStrip from './components/dashboard/MetricStrip'
-import FilterRow from './components/dashboard/FilterRow'
 import RightRail from './components/dashboard/RightRail'
 import KanbanBoard from './components/KanbanBoard/KanbanBoard'
 import ArchivePanel from './components/RightPanel/ArchivePanel'
@@ -108,7 +107,6 @@ function App() {
       ) : (
         <>
           <MetricStrip metrics={metrics} />
-          <FilterRow />
           <QuickActions />
           <div className="dashboard-grid">
             <div className="dashboard-main">
