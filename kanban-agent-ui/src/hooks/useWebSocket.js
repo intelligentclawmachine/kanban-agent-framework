@@ -25,6 +25,7 @@ const MESSAGE_TO_QUERIES = {
   'step-tokens-update': ['sessions'],
   'report-created': ['reports'],
   'events-updated': ['events'],
+  'session-thoughts': ['sessions'],
 }
 
 export function useWebSocket() {

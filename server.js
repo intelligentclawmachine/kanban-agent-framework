@@ -3340,6 +3340,19 @@ async function reconcileTaskStates() {
       }
     }
 
+    if (task.executionStatus === 'plan-ready') {
+      const hasSession = Array.from(activeSessions.values()).some(s => s.taskId === task.id);
+      if (!hasSession) {
+        // Plan exists but no active session — re-queue execution
+        const hasPlan = await planExists(task.id);
+        if (hasPlan) {
+          console.log(`🔄 Re-queuing plan-ready task ${task.id}: ${task.title}`);
+          await enqueueExecution(task.id, task);
+          fixedCount += 1;
+        }
+      }
+    }
+
     if (task.executionStatus === 'executing') {
       const hasSession = Array.from(activeSessions.values()).some(s => s.taskId === task.id);
       if (!hasSession) {
@@ -3614,7 +3627,19 @@ async function spawnSubAgent(execId, prompt, taskId, stepNumber, agentType = 'au
   const resolvedModel = model || getDefaultModel();
   const resolvedTimeout = timeoutSeconds || 300;
 
-  console.log(`   🤖 Spawning agent for Step ${stepNumber} | Model: ${resolvedModel} | Timeout: ${resolvedTimeout}s`);
+  // Generate openclawSessionId BEFORE spawning so the thoughts endpoint can find the JSONL immediately
+  const openclawSessionId = `kanban-${Date.now()}`;
+
+  // Update the active session with this openclawSessionId so the frontend can poll thoughts immediately
+  for (const [sid, activeSession] of activeSessions) {
+    if (activeSession.taskId === taskId && activeSession.type === 'execution') {
+      activeSession.openclawSessionId = openclawSessionId;
+      break;
+    }
+  }
+  await persistActiveSessions();
+
+  console.log(`   🤖 Spawning agent for Step ${stepNumber} | Model: ${resolvedModel} | Timeout: ${resolvedTimeout}s | Session: ${openclawSessionId}`);
 
   const outputPath = path.join(CONFIG.OUTPUTS_DIR, `step-${stepNumber}-output-${Date.now()}.txt`);
 
@@ -3624,7 +3649,8 @@ async function spawnSubAgent(execId, prompt, taskId, stepNumber, agentType = 'au
       outputPath: outputPath,
       model: resolvedModel,
       timeoutSeconds: resolvedTimeout,
-      agentType: agentType
+      agentType: agentType,
+      sessionId: openclawSessionId
     });
 
     console.log(`   ✅ Agent completed Step ${stepNumber}: ${agentResult.success ? 'SUCCESS' : 'FAILED'}`);
@@ -3638,7 +3664,8 @@ async function spawnSubAgent(execId, prompt, taskId, stepNumber, agentType = 'au
       files: agentResult.files,
       urls: agentResult.urls,
       model: resolvedModel,
-      tokensUsed: agentResult.tokensUsed || 0
+      tokensUsed: agentResult.tokensUsed || 0,
+      openclawSessionId: agentResult.openclawSessionId || openclawSessionId
     };
 
   } catch (err) {
@@ -3911,7 +3938,8 @@ async function executePlanStep(taskId, stepNumber, steps, execId) {
 async function executePlan(taskId, task) {
   const execId = `exec-${taskId}-${Date.now()}`;
   const sessionId = `session-${Date.now()}`;
-  
+  const openclawSessionId = `kanban-${Date.now()}`;
+
   // Create execution session
   const execSession = {
     id: execId,
@@ -3922,9 +3950,10 @@ async function executePlan(taskId, task) {
     type: 'execution',
     status: 'executing',
     startedAt: new Date().toISOString(),
-    currentStep: 1
+    currentStep: 1,
+    openclawSessionId
   };
-  
+
   executionSessions.set(execId, execSession);
   activeSessions.set(sessionId, {
     id: sessionId,
@@ -3935,7 +3964,8 @@ async function executePlan(taskId, task) {
     status: 'executing',
     startedAt: new Date().toISOString(),
     currentStep: 'Starting execution...',
-    currentStepTitle: ''
+    currentStepTitle: '',
+    openclawSessionId
   });
   await persistActiveSessions();
   
@@ -4274,8 +4304,9 @@ app.post('/api/v1/plans/:taskId/planning', async (req, res) => {
       timestamp: new Date().toISOString()
     });
     
-    // Create session record
+    // Create session record with openclawSessionId set upfront for thought streaming
     const sessionId = `session-${Date.now()}`;
+    const planOpenclawSessionId = `kanban-${Date.now()}`;
     activeSessions.set(sessionId, {
       id: sessionId,
       taskId,
@@ -4284,7 +4315,8 @@ app.post('/api/v1/plans/:taskId/planning', async (req, res) => {
       type: 'planning',
       status: 'planning',
       startedAt: new Date().toISOString(),
-      currentStep: 'Generating plan...'
+      currentStep: 'Generating plan...',
+      openclawSessionId: planOpenclawSessionId
     });
     await persistActiveSessions();
     
@@ -4300,69 +4332,25 @@ app.post('/api/v1/plans/:taskId/planning', async (req, res) => {
     // Notify WebSocket clients
     broadcastUpdate('session-started', { taskId, sessionId, sessionType: 'planning' });
     
+    // Respond immediately — don't block on agent spawning
+    res.json({
+      success: true,
+      taskId,
+      sessionId,
+      status: 'planning',
+      message: 'Planning phase initiated'
+    });
+
     // ============================================
-    // PHASE 3: Spawn actual planning agent
+    // PHASE 3: Spawn planning agent ASYNC (fire-and-forget)
     // ============================================
-    
-    // Build planning prompt
-    const planningPrompt = `You are a planning agent. Create a detailed execution plan for this task:
+    (async () => {
+      try {
+        console.log(`🤖 Spawning REAL planning agent for task ${taskId}`);
 
-**Task:** ${task.title}
-**Description:** ${task.description || 'No description provided'}
-**Priority:** ${task.priority}
-**Agent Type:** ${task.agentType || 'auto'}
+        const planOutputPath = path.join(PLANS_CONFIG.ACTIVE_DIR, taskId, 'plan.md');
 
-Create a plan with:
-1. Clear objective
-2. 3-7 concrete execution steps
-3. Success criteria
-4. Estimated time for each step
-
-Save the plan to: ~/.openclaw/workspace/plans/active/${taskId}/plan.md
-
-Use this format:
-
----
-taskId: ${taskId}
-status: plan-ready
-stepCount: {N}
----
-
-# Execution Plan
-
-## Objective
-{Clear objective statement}
-
-## Execution Steps
-
-### Step 1: {Title}
-**Agent:** {agentType}
-**Time:** {X} minutes
-
-{Detailed instructions}
-
-### Step 2: ...
-
-## Success Criteria
-- [ ] {Criterion 1}
-- [ ] {Criterion 2}
-
-End with:
-PLAN_COMPLETE
-Estimated total time: {X} minutes
-Confidence: {High|Medium|Low}
-`;
-
-    // Spawn planning agent as subagent
-    try {
-      const planningTask = `Generate execution plan for task "${task.title}" (${taskId}) and save to ~/.openclaw/workspace/plans/active/${taskId}/plan.md. Task description: ${task.description || 'Create a simple HTML to-do list app'}`;
-      
-      console.log(`🤖 Spawning REAL planning agent for task ${taskId}`);
-      
-      // PRODUCTION: Use real agent to create plan
-      const planOutputPath = path.join(PLANS_CONFIG.ACTIVE_DIR, taskId, 'plan.md');
-      
-      const planningPrompt = `You are a planning agent. Create a detailed execution plan for this task:
+        const planningPrompt = `You are a planning agent. Create a detailed execution plan for this task:
 
 **Task Title:** ${task.title}
 **Task Description:** ${task.description || 'No description provided'}
@@ -4409,115 +4397,119 @@ PLAN_COMPLETE
 Estimated total time: {X} minutes
 Confidence: {High|Medium|Low}`;
 
-      // Execute planning agent — use agent profile model if available
-      const planAgentProfile = await getAgentProfileForTask(taskId);
-      const planModel = planAgentProfile?.model || getDefaultModel();
-      const planTimeout = planAgentProfile?.sandbox?.timeout || 300;
+        // Execute planning agent — use agent profile model if available
+        const planAgentProfile = await getAgentProfileForTask(taskId);
+        const planModel = planAgentProfile?.model || getDefaultModel();
+        const planTimeout = planAgentProfile?.sandbox?.timeout || 300;
 
-      const planResult = await spawnAgentWithResult({
-        task: planningPrompt,
-        outputPath: planOutputPath,
-        model: planModel,
-        timeoutSeconds: planTimeout,
-        agentType: 'planner'
-      });
-      
-      if (!planResult.success) {
-        throw new Error(`Planning failed: ${planResult.error || 'Unknown error'}`);
-      }
-      
-      console.log(`✅ Planning agent completed for task ${taskId}`);
-      console.log(`   Result: ${planResult.result}`);
-      
-      // Verify plan file exists
-      try {
-        await fs.access(planOutputPath);
-        console.log(`✅ Plan file created: ${planOutputPath}`);
-      } catch (err) {
-        console.error(`❌ Plan file not found: ${planOutputPath}`);
-        throw new Error('Planning agent did not create plan file');
-      }
-      
-      // Update session status
-      activeSessions.set(sessionId, {
-        ...activeSessions.get(sessionId),
-        status: 'plan-ready',
-        planId: taskId,
-        currentStep: 'Plan ready - auto-executing'
-      });
-      await persistActiveSessions();
-      
-      // Update task status
-      task.executionStatus = 'plan-ready';
-      await saveTasks(tasks);
-      
-      // Log completion
-      await appendLog(taskId, {
-        level: 'success',
-        message: 'Planning complete via agent - auto-executing',
-        details: planResult.result,
-        timestamp: new Date().toISOString()
-      });
-      
-      // Notify frontend
-      broadcastUpdate('plan-ready', { taskId, sessionId });
-      
-      // ============================================
-      // AUTO-EXECUTE: Queue execution immediately after planning
-      // ============================================
-      console.log(`🚀 Auto-executing plan for task ${taskId}`);
-      
-      try {
-        // Remove planning session first
-        activeSessions.delete(sessionId);
-        await persistActiveSessions();
-        broadcastUpdate('session-ended', { sessionId, taskId });
-        
-        // Queue execution with persistence
-        await enqueueExecution(taskId, task);
-        console.log(`✅ Auto-execution queued for task ${taskId}`);
-      } catch (execErr) {
-        console.error(`❌ Auto-execution failed for task ${taskId}:`, execErr);
-        
-        // Update task with error
-        const tasks = await getTasks();
-        const task = tasks.find(t => t.id === taskId);
-        if (task) {
-          task.executionStatus = 'error';
-          await saveTasks(tasks);
+        const planResult = await spawnAgentWithResult({
+          task: planningPrompt,
+          outputPath: planOutputPath,
+          model: planModel,
+          timeoutSeconds: planTimeout,
+          agentType: 'planner',
+          sessionId: planOpenclawSessionId
+        });
+
+        if (!planResult.success) {
+          throw new Error(`Planning failed: ${planResult.error || 'Unknown error'}`);
         }
+
+        console.log(`✅ Planning agent completed for task ${taskId}`);
+
+        // Verify plan file exists
+        try {
+          await fs.access(planOutputPath);
+          console.log(`✅ Plan file created: ${planOutputPath}`);
+        } catch (err) {
+          console.error(`❌ Plan file not found: ${planOutputPath}`);
+          throw new Error('Planning agent did not create plan file');
+        }
+
+        // Update session status
+        activeSessions.set(sessionId, {
+          ...activeSessions.get(sessionId),
+          status: 'plan-ready',
+          planId: taskId,
+          currentStep: 'Plan ready - auto-executing'
+        });
+        await persistActiveSessions();
+
+        // Update task status
+        const latestTasks = await getTasks();
+        const latestTask = latestTasks.find(t => t.id === taskId);
+        if (latestTask) {
+          latestTask.executionStatus = 'plan-ready';
+          await saveTasks(latestTasks);
+        }
+
+        // Log completion
+        await appendLog(taskId, {
+          level: 'success',
+          message: 'Planning complete via agent - auto-executing',
+          details: planResult.result,
+          timestamp: new Date().toISOString()
+        });
+
+        // Notify frontend
+        broadcastUpdate('plan-ready', { taskId, sessionId });
+
+        // ============================================
+        // AUTO-EXECUTE: Queue execution immediately after planning
+        // ============================================
+        console.log(`🚀 Auto-executing plan for task ${taskId}`);
+
+        try {
+          // Remove planning session first
+          activeSessions.delete(sessionId);
+          await persistActiveSessions();
+          broadcastUpdate('session-ended', { sessionId, taskId });
+
+          // Re-read task for enqueue (may have changed)
+          const freshTasks = await getTasks();
+          const freshTask = freshTasks.find(t => t.id === taskId);
+          if (freshTask) {
+            await enqueueExecution(taskId, freshTask);
+            console.log(`✅ Auto-execution queued for task ${taskId}`);
+          }
+        } catch (execErr) {
+          console.error(`❌ Auto-execution failed for task ${taskId}:`, execErr);
+
+          const errTasks = await getTasks();
+          const errTask = errTasks.find(t => t.id === taskId);
+          if (errTask) {
+            errTask.executionStatus = 'error';
+            await saveTasks(errTasks);
+          }
+        }
+
+      } catch (spawnErr) {
+        console.error('Error in planning phase:', spawnErr);
+
+        // Update session to error state
+        activeSessions.set(sessionId, {
+          ...activeSessions.get(sessionId),
+          status: 'error',
+          error: spawnErr.message
+        });
+        await persistActiveSessions();
+
+        // Update task to error state
+        const errTasks = await getTasks();
+        const errTask = errTasks.find(t => t.id === taskId);
+        if (errTask) {
+          errTask.executionStatus = 'error';
+          await saveTasks(errTasks);
+        }
+
+        broadcastUpdate('execution-error', {
+          taskId,
+          sessionId,
+          error: spawnErr.message
+        });
       }
-      
-    } catch (spawnErr) {
-      console.error('Error in planning phase:', spawnErr);
-      
-      // Update session to error state
-      activeSessions.set(sessionId, {
-        ...activeSessions.get(sessionId),
-        status: 'error',
-        error: spawnErr.message
-      });
-      await persistActiveSessions();
-      
-      // Update task to error state
-      task.executionStatus = 'error';
-      await saveTasks(tasks);
-      
-      broadcastUpdate('execution-error', { 
-        taskId, 
-        sessionId,
-        error: spawnErr.message 
-      });
-    }
-    
-    res.json({
-      success: true,
-      taskId,
-      sessionId,
-      status: 'planning',
-      message: 'Planning phase initiated'
-    });
-    
+    })();
+
   } catch (err) {
     console.error('Error starting planning phase:', err);
     res.status(500).json({ error: 'Failed to start planning phase' });
@@ -4716,6 +4708,127 @@ app.get('/api/v1/sessions/:sessionId/log', async (req, res) => {
   } catch (err) {
     console.error('Error getting session log:', err);
     res.status(500).json({ error: 'Failed to get session log' });
+  }
+});
+
+// GET /sessions/:sessionId/thoughts - Stream agent thoughts from JSONL
+const OPENCLAW_SESSIONS_DIR = path.join(process.env.HOME, '.openclaw/agents/main/sessions');
+
+app.get('/api/v1/sessions/:sessionId/thoughts', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { after, limit = 50 } = req.query;
+
+    // Find the active session to get openclawSessionId
+    const session = activeSessions.get(sessionId);
+    const openclawId = session?.openclawSessionId;
+
+    if (!openclawId) {
+      return res.json({ thoughts: [], openclawSessionId: null });
+    }
+
+    // Read the JSONL file — try exact match first, then discover by scanning directory
+    let jsonlPath = path.join(OPENCLAW_SESSIONS_DIR, `${openclawId}.jsonl`);
+    let fileContent;
+    try {
+      fileContent = await fs.readFile(jsonlPath, 'utf8');
+    } catch (err) {
+      // Exact file not found — OpenClaw may use a different naming convention internally.
+      // Scan for the most recently created JSONL file in the sessions directory.
+      try {
+        const entries = await fs.readdir(OPENCLAW_SESSIONS_DIR);
+        const jsonlFiles = entries.filter(f => f.endsWith('.jsonl'));
+        if (jsonlFiles.length > 0) {
+          const stats = await Promise.all(
+            jsonlFiles.map(async (f) => {
+              const fullPath = path.join(OPENCLAW_SESSIONS_DIR, f);
+              const stat = await fs.stat(fullPath);
+              return { file: f, path: fullPath, mtimeMs: stat.mtimeMs };
+            })
+          );
+          // Pick the most recently modified JSONL file
+          stats.sort((a, b) => b.mtimeMs - a.mtimeMs);
+          const newest = stats[0];
+          // Only use it if it was modified within the last 5 minutes (likely the active session)
+          if (Date.now() - newest.mtimeMs < 5 * 60 * 1000) {
+            jsonlPath = newest.path;
+            fileContent = await fs.readFile(jsonlPath, 'utf8');
+          }
+        }
+      } catch (scanErr) {
+        // Scanning failed — sessions directory may not exist yet
+      }
+      if (!fileContent) {
+        return res.json({ thoughts: [], openclawSessionId: openclawId });
+      }
+    }
+
+    const lines = fileContent.trim().split('\n').filter(l => l.trim());
+    const thoughts = [];
+
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line);
+        if (entry.type === 'message' && entry.message) {
+          const msg = entry.message;
+          const ts = entry.timestamp || msg.timestamp;
+
+          // Filter by timestamp if `after` param provided
+          if (after && ts && ts <= after) continue;
+
+          if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+            for (const block of msg.content) {
+              if (block.type === 'thinking' && block.thinking) {
+                thoughts.push({
+                  timestamp: ts,
+                  type: 'thinking',
+                  content: block.thinking.substring(0, 500)
+                });
+              } else if (block.type === 'text' && block.text) {
+                thoughts.push({
+                  timestamp: ts,
+                  type: 'text',
+                  content: block.text.substring(0, 500)
+                });
+              } else if (block.type === 'toolCall' && block.name) {
+                thoughts.push({
+                  timestamp: ts,
+                  type: 'tool',
+                  content: `${block.name}`,
+                  toolName: block.name,
+                  toolArgs: typeof block.arguments === 'string'
+                    ? block.arguments.substring(0, 200)
+                    : JSON.stringify(block.arguments || {}).substring(0, 200)
+                });
+              }
+            }
+          } else if (msg.role === 'toolResult') {
+            const resultText = Array.isArray(msg.content)
+              ? msg.content.map(c => c.text || '').join(' ')
+              : (typeof msg.content === 'string' ? msg.content : '');
+            if (resultText) {
+              thoughts.push({
+                timestamp: ts,
+                type: 'toolResult',
+                content: resultText.substring(0, 300),
+                toolName: msg.toolName || ''
+              });
+            }
+          }
+        }
+      } catch (parseErr) {
+        // Skip malformed lines
+      }
+    }
+
+    // Return last N entries
+    const maxEntries = parseInt(limit) || 50;
+    const result = thoughts.slice(-maxEntries);
+
+    res.json({ thoughts: result, openclawSessionId: openclawId });
+  } catch (err) {
+    console.error('Error getting session thoughts:', err);
+    res.status(500).json({ error: 'Failed to get session thoughts' });
   }
 });
 

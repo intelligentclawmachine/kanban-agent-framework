@@ -16,7 +16,8 @@ async function spawnAgentWithResult({
   outputPath,
   model = 'anthropic/claude-sonnet-4-5',
   timeoutSeconds = 3600,
-  agentType = 'auto'
+  agentType = 'auto',
+  sessionId = null
 }) {
   const startTime = Date.now();
   const sessionLabel = `agent-${Date.now()}`;
@@ -70,7 +71,8 @@ Notes: [What went wrong]
       prompt: fullPrompt,
       model,
       timeoutSeconds,
-      outputPath
+      outputPath,
+      sessionId
     });
     
     const duration = (Date.now() - startTime) / 1000;
@@ -148,7 +150,8 @@ Notes: [What went wrong]
       notes: parsed.notes || '',
       error: parsed.error,
       duration,
-      tokensUsed: agentResult.tokensUsed || 0
+      tokensUsed: agentResult.tokensUsed || 0,
+      openclawSessionId: agentResult.openclawSessionId || null
     };
     
   } catch (err) {
@@ -172,14 +175,14 @@ Notes: [What went wrong]
 /**
  * Run agent via OpenClaw CLI
  */
-async function runAgentViaOpenClaw({ prompt, model, timeoutSeconds, outputPath }) {
+async function runAgentViaOpenClaw({ prompt, model, timeoutSeconds, outputPath, sessionId: externalSessionId }) {
   return new Promise((resolve, reject) => {
     const outputChunks = [];
     const errorChunks = [];
-    
+
     // Build OpenClaw command
     // Using 'agent --local' to run agent directly without channel routing
-    const sessionId = `kanban-${Date.now()}`;
+    const sessionId = externalSessionId || `kanban-${Date.now()}`;
     const args = [
       'agent',
       '--local',
@@ -304,7 +307,8 @@ async function runAgentViaOpenClaw({ prompt, model, timeoutSeconds, outputPath }
         resolve({
           output: finalOutput,
           exitCode: code,
-          tokensUsed: extractTokensFromOutput(output)
+          tokensUsed: extractTokensFromOutput(output),
+          openclawSessionId: sessionId
         });
       } else if (code === 0 && !finalOutput && !fileOutput) {
         // Process exited cleanly but produced no output — treat as failure
@@ -313,7 +317,8 @@ async function runAgentViaOpenClaw({ prompt, model, timeoutSeconds, outputPath }
         resolve({
           output: finalOutput,
           exitCode: code,
-          tokensUsed: extractTokensFromOutput(output)
+          tokensUsed: extractTokensFromOutput(output),
+          openclawSessionId: sessionId
         });
       } else {
         reject(new Error(`Agent exited with code ${code}: ${errors || output}`));

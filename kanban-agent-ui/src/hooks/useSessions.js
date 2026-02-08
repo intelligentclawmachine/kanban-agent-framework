@@ -26,3 +26,13 @@ export function useKillSession() {
     },
   })
 }
+
+export function useSessionThoughts(sessionId, enabled = true) {
+  return useQuery({
+    queryKey: ['sessions', 'thoughts', sessionId],
+    queryFn: () => sessionsApi.getThoughts(sessionId),
+    enabled: !!sessionId && enabled,
+    refetchInterval: 3000,
+    staleTime: 2000,
+  })
+}
