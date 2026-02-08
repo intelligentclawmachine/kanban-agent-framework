@@ -17,7 +17,8 @@ async function spawnAgentWithResult({
   model = 'anthropic/claude-sonnet-4-5',
   timeoutSeconds = 3600,
   agentType = 'auto',
-  sessionId = null
+  sessionId = null,
+  agentId = null
 }) {
   const startTime = Date.now();
   const sessionLabel = `agent-${Date.now()}`;
@@ -72,7 +73,8 @@ Notes: [What went wrong]
       model,
       timeoutSeconds,
       outputPath,
-      sessionId
+      sessionId,
+      agentId
     });
     
     const duration = (Date.now() - startTime) / 1000;
@@ -175,7 +177,7 @@ Notes: [What went wrong]
 /**
  * Run agent via OpenClaw CLI
  */
-async function runAgentViaOpenClaw({ prompt, model, timeoutSeconds, outputPath, sessionId: externalSessionId }) {
+async function runAgentViaOpenClaw({ prompt, model, timeoutSeconds, outputPath, sessionId: externalSessionId, agentId }) {
   return new Promise((resolve, reject) => {
     const outputChunks = [];
     const errorChunks = [];
@@ -191,15 +193,19 @@ async function runAgentViaOpenClaw({ prompt, model, timeoutSeconds, outputPath, 
       '--timeout', timeoutSeconds.toString(),
       '--json'
     ];
-    
-    // Set model via environment variable if supported
+
+    // Pass --agent <id> to use the agent's configured model and settings
+    if (agentId) {
+      args.push('--agent', agentId);
+      console.log(`   Using OpenClaw agent: ${agentId} (model should be: ${model})`);
+    }
+
     const env = {
       ...process.env,
-      OPENCLAW_OUTPUT_PATH: outputPath,
-      OPENCLAW_DEFAULT_MODEL: model
+      OPENCLAW_OUTPUT_PATH: outputPath
     };
-    
-    console.log(`   Executing: openclaw ${args[0]} ${args[1]} --message "..." --timeout ${timeoutSeconds}...`);
+
+    console.log(`   Executing: openclaw ${args[0]} ${args[1]}${agentId ? ` --agent ${agentId}` : ''} --message "..." --timeout ${timeoutSeconds}...`);
 
     const proc = spawn('openclaw', args, {
       env: env

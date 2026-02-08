@@ -334,9 +334,14 @@ function TaskModal() {
                 <option value="">Select an agent...</option>
                 {customAgents.map((agent) => (
                   <option key={agent.id} value={`custom:${agent.id}`}>
-                    {agent.icon || '🤖'} {agent.name}
+                    {agent.icon || '\uD83E\uDD16'} {agent.name}
                   </option>
                 ))}
+                {formData.agentId && !customAgents.find(a => a.id === formData.agentId) && (
+                  <option value={`custom:${formData.agentId}`}>
+                    {'\uD83E\uDD16'} {agentsData ? '(deleted agent)' : 'Loading...'}
+                  </option>
+                )}
               </select>
               {customAgents.length === 0 && (
                 <span className="form-hint">Create agents in Agent Manager first</span>

@@ -19,7 +19,7 @@ const cron = require('node-cron');
 const chokidar = require('chokidar');
 const http = require('http');
 const WebSocket = require('ws');
-const { spawn, exec } = require('child_process');
+const { spawn, exec, execFile, execSync } = require('child_process');
 const { promisify } = require('util');
 const execAsync = promisify(exec);
 
@@ -1399,7 +1399,12 @@ app.patch('/api/v1/tasks/:id', async (req, res) => {
     
     await saveTasks(tasks);
     // await pushToObsidian(tasks[index]); // DISABLED
-    
+
+    broadcastUpdate('task-updated', { taskId: tasks[index].id, title: tasks[index].title });
+    if (updates.status === 'done') {
+      broadcastUpdate('task-completed', { taskId: tasks[index].id, title: tasks[index].title });
+    }
+
     res.json(tasks[index]);
   } catch (err) {
     console.error('Error updating task:', err);
@@ -1435,7 +1440,12 @@ app.post('/api/v1/tasks/:id/move', async (req, res) => {
     
     await saveTasks(tasks);
     // await pushToObsidian(task); // DISABLED
-    
+
+    broadcastUpdate('task-moved', { taskId: task.id, title: task.title, oldStatus, newStatus: status });
+    if (status === 'done' && oldStatus !== 'done') {
+      broadcastUpdate('task-completed', { taskId: task.id, title: task.title });
+    }
+
     await logEvent({
       type: 'task',
       severity: 'info',
@@ -1443,7 +1453,7 @@ app.post('/api/v1/tasks/:id/move', async (req, res) => {
       description: `Moved "${task.title}" from ${oldStatus} to ${status}`,
       metadata: { taskId: task.id, oldStatus, newStatus: status }
     });
-    
+
     res.json(task);
   } catch (err) {
     console.error('Error moving task:', err);
@@ -1500,7 +1510,9 @@ app.delete('/api/v1/tasks/:id', async (req, res) => {
     const task = tasks[index];
     tasks.splice(index, 1);
     await saveTasks(tasks);
-    
+
+    broadcastUpdate('task-deleted', { taskId: task.id });
+
     // Delete from Obsidian
     if (task.obsidianPath) {
       try {
@@ -3527,7 +3539,9 @@ async function executeStepWithAgent(taskId, step, allSteps, execId) {
   const timeConstraint = `\n**Time Constraint:** You have ${agentTimeout} seconds (${timeMinutes} minutes) to complete this step. Budget your time accordingly.`;
 
   // Build system prompt prefix
-  const systemPromptSection = agentSystemPrompt
+  // When agentId is present, OpenClaw will inject the agent's system prompt natively via --agent flag,
+  // so skip manual prepending to avoid double-prompting
+  const systemPromptSection = (agentSystemPrompt && !agentProfile?.id)
     ? `${agentSystemPrompt}\n\n---\n\n`
     : '';
 
@@ -3581,7 +3595,7 @@ Begin execution now.`;
     console.log(`   Agent: ${agentProfile?.name || 'default'} | Model: ${agentModel} | Timeout: ${agentTimeout}s`);
 
     // Create a subagent session via OpenClaw
-    const spawnResult = await spawnSubAgent(execId, executionPrompt, taskId, step.number, step.agent, agentModel, agentTimeout);
+    const spawnResult = await spawnSubAgent(execId, executionPrompt, taskId, step.number, step.agent, agentModel, agentTimeout, agentProfile?.id || null);
 
     // Parse the agent response
     const result = parseAgentResponse(spawnResult.output || '');
@@ -3620,7 +3634,7 @@ Begin execution now.`;
  * Spawn a subagent to execute a step
  * This simulates agent execution and creates actual output files
  */
-async function spawnSubAgent(execId, prompt, taskId, stepNumber, agentType = 'auto', model = null, timeoutSeconds = null) {
+async function spawnSubAgent(execId, prompt, taskId, stepNumber, agentType = 'auto', model = null, timeoutSeconds = null, agentId = null) {
   const promptPath = path.join(CONFIG.OUTPUTS_DIR, `.prompt-${execId}.txt`);
 
   // Write prompt to file for reference
@@ -3653,7 +3667,8 @@ async function spawnSubAgent(execId, prompt, taskId, stepNumber, agentType = 'au
       model: resolvedModel,
       timeoutSeconds: resolvedTimeout,
       agentType: agentType,
-      sessionId: openclawSessionId
+      sessionId: openclawSessionId,
+      agentId: agentId
     });
 
     console.log(`   ✅ Agent completed Step ${stepNumber}: ${agentResult.success ? 'SUCCESS' : 'FAILED'}`);
@@ -4131,10 +4146,14 @@ async function runPlanExecution(taskId, execId) {
     completionSummary.durationMinutes = execSession.durationMinutes;
     completionSummary.cost = execSession.estimatedCost;
     
-    // Update task with corrected completion summary
-    if (task) {
-      task.completionSummary = completionSummary;
-      await saveTasks(tasks);
+    // Re-fetch tasks to avoid overwriting concurrent changes (the first save was minutes ago)
+    const freshTasks = await getTasks();
+    const freshTask = freshTasks.find(t => t.id === taskId);
+    if (freshTask) {
+      freshTask.completionSummary = completionSummary;
+      freshTask.executionStatus = 'complete';
+      freshTask.status = 'done';
+      await saveTasks(freshTasks);
     }
     
     // Archive plan and session
@@ -4418,7 +4437,8 @@ Confidence: {High|Medium|Low}`;
           model: planModel,
           timeoutSeconds: planTimeout,
           agentType: 'planner',
-          sessionId: planOpenclawSessionId
+          sessionId: planOpenclawSessionId,
+          agentId: planAgentProfile?.id || null
         });
 
         if (!planResult.success) {
@@ -4634,7 +4654,6 @@ app.get('/api/v1/sessions/openclaw', async (req, res) => {
     const args = ['sessions', '--json'];
     if (activeMinutes > 0) args.push('--active', String(activeMinutes));
 
-    const { execFile } = require('child_process');
     const result = await new Promise((resolve, reject) => {
       execFile('openclaw', args, { timeout: 10000 }, (err, stdout, stderr) => {
         if (err) return reject(err);
@@ -5176,12 +5195,29 @@ app.get('/api/v1/usage/global-sessions', async (req, res) => {
 app.post('/api/v1/utils/pick-folder', async (req, res) => {
   try {
     const { currentPath } = req.body || {};
-    const defaultDir = currentPath
+    let defaultDir = currentPath
       ? currentPath.replace(/^~/, process.env.HOME)
       : path.join(process.env.HOME, 'Desktop');
 
-    const { execSync } = require('child_process');
-    const script = `osascript -e 'set theFolder to choose folder with prompt "Select Output Folder" default location POSIX file "${defaultDir}"' -e 'return POSIX path of theFolder'`;
+    // Walk up to nearest existing ancestor directory (fixes crash when dedicated output folder doesn't exist yet)
+    try {
+      while (defaultDir && defaultDir !== '/') {
+        await fs.access(defaultDir);
+        break;
+      }
+    } catch {
+      defaultDir = path.dirname(defaultDir);
+      // Keep walking up until we find an existing directory
+      while (defaultDir && defaultDir !== '/') {
+        try { await fs.access(defaultDir); break; } catch { defaultDir = path.dirname(defaultDir); }
+      }
+    }
+    if (!defaultDir || defaultDir === '/') defaultDir = path.join(process.env.HOME, 'Desktop');
+
+    // Escape single quotes in path to prevent osascript injection
+    const escapedDir = defaultDir.replace(/'/g, "'\\''");
+
+    const script = `osascript -e 'set theFolder to choose folder with prompt "Select Output Folder" default location POSIX file "${escapedDir}"' -e 'return POSIX path of theFolder'`;
     const result = execSync(script, { timeout: 60000, encoding: 'utf-8' }).trim();
 
     // Convert back to ~ shorthand if under home dir
@@ -5208,12 +5244,28 @@ app.post('/api/v1/utils/pick-folder', async (req, res) => {
 app.post('/api/v1/utils/pick-file', async (req, res) => {
   try {
     const { currentPath } = req.body || {};
-    const defaultDir = currentPath
+    let defaultDir = currentPath
       ? currentPath.replace(/^~/, process.env.HOME)
       : path.join(process.env.HOME, 'Desktop');
 
-    const { execSync } = require('child_process');
-    const script = `osascript -e 'set theFile to choose file with prompt "Select Context File" default location POSIX file "${defaultDir}"' -e 'return POSIX path of theFile'`;
+    // Walk up to nearest existing ancestor directory
+    try {
+      while (defaultDir && defaultDir !== '/') {
+        await fs.access(defaultDir);
+        break;
+      }
+    } catch {
+      defaultDir = path.dirname(defaultDir);
+      while (defaultDir && defaultDir !== '/') {
+        try { await fs.access(defaultDir); break; } catch { defaultDir = path.dirname(defaultDir); }
+      }
+    }
+    if (!defaultDir || defaultDir === '/') defaultDir = path.join(process.env.HOME, 'Desktop');
+
+    // Escape single quotes in path to prevent osascript injection
+    const escapedDir = defaultDir.replace(/'/g, "'\\''");
+
+    const script = `osascript -e 'set theFile to choose file with prompt "Select Context File" default location POSIX file "${escapedDir}"' -e 'return POSIX path of theFile'`;
     const result = execSync(script, { timeout: 60000, encoding: 'utf-8' }).trim();
 
     const homePath = process.env.HOME;
@@ -5239,7 +5291,6 @@ app.post('/api/v1/utils/open-in-finder', async (req, res) => {
       return res.status(400).json({ error: 'filePath is required' });
     }
 
-    const { exec } = require('child_process');
     const resolvedPath = filePath.replace(/^~/, process.env.HOME);
 
     // Check if path exists
@@ -5249,14 +5300,14 @@ app.post('/api/v1/utils/open-in-finder', async (req, res) => {
       return res.status(404).json({ error: 'Path not found', path: resolvedPath });
     }
 
-    // Check if it's a file or directory
+    // Check if it's a file or directory — use execFile to prevent command injection
     const stat = await fs.stat(resolvedPath);
     if (stat.isFile()) {
       // Reveal file in Finder (selects it)
-      exec(`open -R "${resolvedPath}"`);
+      execFile('open', ['-R', resolvedPath]);
     } else {
       // Open directory in Finder
-      exec(`open "${resolvedPath}"`);
+      execFile('open', [resolvedPath]);
     }
 
     res.json({ success: true });
