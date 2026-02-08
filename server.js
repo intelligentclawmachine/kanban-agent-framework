@@ -3492,6 +3492,9 @@ async function executeStepWithAgent(taskId, step, allSteps, execId) {
   // Look up agent profile for this task
   const agentProfile = await getAgentProfileForTask(taskId);
   const agentModel = agentProfile?.model || getDefaultModel();
+  if (agentProfile && !agentProfile.model) {
+    console.warn(`[model-fallback] Agent profile "${agentProfile.name}" (${agentProfile.id}) has no model set — falling back to default: ${agentModel}`);
+  }
   const agentTimeout = agentProfile?.sandbox?.timeout || 300;
   const agentSystemPrompt = agentProfile?.prompt || '';
 
@@ -3869,7 +3872,11 @@ async function executePlanStep(taskId, stepNumber, steps, execId) {
   // Update execution session with model info and step title
   const execSession = executionSessions.get(execId);
   const agentProfile = await getAgentProfileForTask(taskId);
-  const modelDisplay = getModelDisplayName(agentProfile?.model || getDefaultModel());
+  const stepResolvedModel = agentProfile?.model || getDefaultModel();
+  if (agentProfile && !agentProfile.model) {
+    console.warn(`[model-fallback] executePlanStep: Agent profile "${agentProfile.name}" has no model — falling back to default: ${stepResolvedModel}`);
+  }
+  const modelDisplay = getModelDisplayName(stepResolvedModel);
 
   if (execSession) {
     execSession.currentStepModel = modelDisplay;
@@ -4400,6 +4407,9 @@ Confidence: {High|Medium|Low}`;
         // Execute planning agent — use agent profile model if available
         const planAgentProfile = await getAgentProfileForTask(taskId);
         const planModel = planAgentProfile?.model || getDefaultModel();
+        if (planAgentProfile && !planAgentProfile.model) {
+          console.warn(`[model-fallback] Planning: Agent profile "${planAgentProfile.name}" has no model — falling back to default: ${planModel}`);
+        }
         const planTimeout = planAgentProfile?.sandbox?.timeout || 300;
 
         const planResult = await spawnAgentWithResult({
@@ -4829,6 +4839,305 @@ app.get('/api/v1/sessions/:sessionId/thoughts', async (req, res) => {
   } catch (err) {
     console.error('Error getting session thoughts:', err);
     res.status(500).json({ error: 'Failed to get session thoughts' });
+  }
+});
+
+// ============================================
+// USAGE DASHBOARD ENDPOINTS
+// ============================================
+
+// GET /usage/providers - Auth profiles + model providers from openclaw.json
+app.get('/api/v1/usage/providers', async (req, res) => {
+  try {
+    const rawFs = require('fs');
+    const configPath = path.join(process.env.HOME, '.openclaw', 'openclaw.json');
+    const authProfilesPath = path.join(process.env.HOME, '.openclaw', 'agents', 'main', 'agent', 'auth-profiles.json');
+
+    const authProfiles = [];
+    const providers = [];
+
+    // --- Auth Profiles from auth-profiles.json ---
+    if (rawFs.existsSync(authProfilesPath)) {
+      try {
+        const apData = JSON.parse(rawFs.readFileSync(authProfilesPath, 'utf8'));
+        const profiles = apData?.profiles || {};
+        const usageStats = apData?.usageStats || {};
+
+        for (const [name, data] of Object.entries(profiles)) {
+          const stats = usageStats[name] || {};
+          authProfiles.push({
+            name,
+            provider: data.provider || name.split(':')[0],
+            mode: data.type || 'unknown',
+            expires: data.expires || null,
+            isOAuth: data.type === 'oauth',
+            lastUsed: stats.lastUsed || null,
+            errorCount: stats.errorCount || 0,
+          });
+        }
+      } catch { /* parse error */ }
+    }
+
+    // --- Model Providers from openclaw.json ---
+    if (rawFs.existsSync(configPath)) {
+      try {
+        const config = JSON.parse(rawFs.readFileSync(configPath, 'utf8'));
+        const defaultModels = config?.agents?.defaults?.models || {};
+
+        const providerModels = {};
+        for (const modelId of Object.keys(defaultModels)) {
+          const parts = modelId.split('/');
+          const prov = parts.length > 2 ? parts.slice(0, -1).join('/') : parts[0];
+          if (!providerModels[prov]) providerModels[prov] = [];
+          const alias = defaultModels[modelId]?.alias || parts[parts.length - 1];
+          providerModels[prov].push(alias);
+        }
+
+        for (const [prov, models] of Object.entries(providerModels)) {
+          providers.push({
+            provider: prov,
+            modelCount: models.length,
+            models,
+          });
+        }
+      } catch { /* parse error */ }
+    }
+
+    res.json({ authProfiles, providers });
+  } catch (err) {
+    console.error('Error getting usage providers:', err);
+    res.status(500).json({ error: 'Failed to get providers' });
+  }
+});
+
+// GET /usage/summary - Aggregated session usage from pastSessions
+app.get('/api/v1/usage/summary', async (req, res) => {
+  try {
+    const totalCost = pastSessions.reduce((sum, s) => sum + (s.estimatedCost || 0), 0);
+    const totalTokens = pastSessions.reduce((sum, s) => sum + (s.tokensUsed || 0), 0);
+    const totalDuration = pastSessions.reduce((sum, s) => sum + (s.durationMinutes || 0), 0);
+
+    // Aggregate by provider
+    const providerAgg = {};
+    const modelAgg = {};
+
+    for (const s of pastSessions) {
+      const fullModel = s.currentStepModel || 'unknown';
+      const parts = fullModel.split('/');
+      const provider = parts.length > 1 ? parts.slice(0, -1).join('/') : 'unknown';
+      const modelName = parts[parts.length - 1] || 'unknown';
+
+      // By provider
+      if (!providerAgg[provider]) {
+        providerAgg[provider] = { provider, cost: 0, tokens: 0, sessions: 0, duration: 0 };
+      }
+      providerAgg[provider].cost += s.estimatedCost || 0;
+      providerAgg[provider].tokens += s.tokensUsed || 0;
+      providerAgg[provider].sessions += 1;
+      providerAgg[provider].duration += s.durationMinutes || 0;
+
+      // By model
+      if (!modelAgg[fullModel]) {
+        modelAgg[fullModel] = { model: modelName, provider, cost: 0, tokens: 0, sessions: 0, duration: 0 };
+      }
+      modelAgg[fullModel].cost += s.estimatedCost || 0;
+      modelAgg[fullModel].tokens += s.tokensUsed || 0;
+      modelAgg[fullModel].sessions += 1;
+      modelAgg[fullModel].duration += s.durationMinutes || 0;
+    }
+
+    const byProvider = Object.values(providerAgg)
+      .map(p => ({ ...p, cost: Math.round(p.cost * 1000) / 1000 }))
+      .sort((a, b) => b.cost - a.cost);
+
+    const byModel = Object.values(modelAgg)
+      .map(m => ({ ...m, cost: Math.round(m.cost * 1000) / 1000 }))
+      .sort((a, b) => b.cost - a.cost);
+
+    const recentSessions = pastSessions.slice(0, 10).map(s => ({
+      taskTitle: s.taskTitle || s.taskId || 'Untitled',
+      model: s.currentStepModel || 'unknown',
+      tokens: s.tokensUsed || 0,
+      cost: s.estimatedCost || 0,
+      duration: s.durationMinutes || 0,
+    }));
+
+    res.json({
+      totals: {
+        cost: Math.round(totalCost * 1000) / 1000,
+        tokens: totalTokens,
+        sessions: pastSessions.length,
+        duration: Math.round(totalDuration * 10) / 10,
+      },
+      byProvider,
+      byModel,
+      recentSessions,
+    });
+  } catch (err) {
+    console.error('Error getting usage summary:', err);
+    res.status(500).json({ error: 'Failed to get usage summary' });
+  }
+});
+
+// GET /usage/global-sessions - Aggregated usage from ALL OpenClaw JSONL sessions
+let _globalSessionsCache = { data: null, timestamp: 0 };
+const GLOBAL_SESSIONS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+app.get('/api/v1/usage/global-sessions', async (req, res) => {
+  try {
+    const now = Date.now();
+    if (_globalSessionsCache.data && (now - _globalSessionsCache.timestamp) < GLOBAL_SESSIONS_CACHE_TTL) {
+      return res.json(_globalSessionsCache.data);
+    }
+
+    const rawFs = require('fs');
+    const readline = require('readline');
+    const agentsDir = path.join(process.env.HOME, '.openclaw', 'agents');
+
+    if (!rawFs.existsSync(agentsDir)) {
+      return res.json({ totals: { cost: 0, tokens: 0, sessions: 0, duration: 0 }, byProvider: [], byModel: [], recentSessions: [] });
+    }
+
+    // Collect all non-deleted JSONL files across all agents
+    const agentDirs = rawFs.readdirSync(agentsDir, { withFileTypes: true })
+      .filter(d => d.isDirectory())
+      .map(d => d.name);
+
+    let allFiles = [];
+    for (const agent of agentDirs) {
+      const sessDir = path.join(agentsDir, agent, 'sessions');
+      if (!rawFs.existsSync(sessDir)) continue;
+      const files = rawFs.readdirSync(sessDir)
+        .filter(f => f.endsWith('.jsonl') && !f.includes('.deleted.'))
+        .map(f => {
+          const fp = path.join(sessDir, f);
+          try {
+            const stat = rawFs.statSync(fp);
+            return { path: fp, mtime: stat.mtimeMs, agent };
+          } catch { return null; }
+        })
+        .filter(Boolean);
+      allFiles.push(...files);
+    }
+
+    // Sort by mtime desc, limit to 200 most recent
+    allFiles.sort((a, b) => b.mtime - a.mtime);
+    allFiles = allFiles.slice(0, 200);
+
+    // Parse each file for session data
+    const sessionResults = [];
+
+    for (const fileInfo of allFiles) {
+      try {
+        const fileStream = rawFs.createReadStream(fileInfo.path, { encoding: 'utf8' });
+        const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+
+        let sessionId = null;
+        let sessionTimestamp = null;
+        let sessionModel = null;
+        let sessionProvider = null;
+        let totalCost = 0;
+        let totalTokens = 0;
+        let msgCount = 0;
+
+        for await (const line of rl) {
+          if (!line.trim()) continue;
+          try {
+            const obj = JSON.parse(line);
+
+            if (obj.type === 'session') {
+              sessionId = obj.id;
+              sessionTimestamp = obj.timestamp;
+            } else if (obj.type === 'model_change') {
+              sessionModel = obj.modelId || sessionModel;
+              sessionProvider = obj.provider || sessionProvider;
+            } else if (obj.type === 'message' && obj.message?.role === 'assistant' && obj.message?.usage) {
+              const u = obj.message.usage;
+              totalTokens += (u.input || 0) + (u.output || 0) + (u.cacheRead || 0);
+              if (u.cost && typeof u.cost.total === 'number') {
+                totalCost += u.cost.total;
+              }
+              msgCount++;
+            }
+          } catch { /* skip malformed line */ }
+        }
+
+        if (sessionId && msgCount > 0) {
+          sessionResults.push({
+            sessionId,
+            agent: fileInfo.agent,
+            model: sessionModel || 'unknown',
+            provider: sessionProvider || 'unknown',
+            cost: totalCost,
+            tokens: totalTokens,
+            messages: msgCount,
+            timestamp: sessionTimestamp,
+            mtime: fileInfo.mtime,
+          });
+        }
+      } catch { /* skip unreadable file */ }
+    }
+
+    // Aggregate totals
+    const totalCost = sessionResults.reduce((s, r) => s + r.cost, 0);
+    const totalTokens = sessionResults.reduce((s, r) => s + r.tokens, 0);
+
+    // By provider
+    const provAgg = {};
+    for (const s of sessionResults) {
+      if (!provAgg[s.provider]) provAgg[s.provider] = { provider: s.provider, cost: 0, tokens: 0, sessions: 0 };
+      provAgg[s.provider].cost += s.cost;
+      provAgg[s.provider].tokens += s.tokens;
+      provAgg[s.provider].sessions++;
+    }
+    const byProvider = Object.values(provAgg)
+      .map(p => ({ ...p, cost: Math.round(p.cost * 10000) / 10000 }))
+      .sort((a, b) => b.cost - a.cost);
+
+    // By model
+    const modelAgg = {};
+    for (const s of sessionResults) {
+      const key = `${s.provider}/${s.model}`;
+      if (!modelAgg[key]) modelAgg[key] = { model: s.model, provider: s.provider, cost: 0, tokens: 0, sessions: 0 };
+      modelAgg[key].cost += s.cost;
+      modelAgg[key].tokens += s.tokens;
+      modelAgg[key].sessions++;
+    }
+    const byModel = Object.values(modelAgg)
+      .map(m => ({ ...m, cost: Math.round(m.cost * 10000) / 10000 }))
+      .sort((a, b) => b.cost - a.cost);
+
+    // Recent sessions (last 20 by mtime)
+    const recentSessions = sessionResults
+      .sort((a, b) => b.mtime - a.mtime)
+      .slice(0, 20)
+      .map(s => ({
+        sessionId: s.sessionId,
+        agent: s.agent,
+        model: s.model,
+        provider: s.provider,
+        tokens: s.tokens,
+        cost: Math.round(s.cost * 10000) / 10000,
+        messages: s.messages,
+        timestamp: s.timestamp,
+      }));
+
+    const result = {
+      totals: {
+        cost: Math.round(totalCost * 10000) / 10000,
+        tokens: totalTokens,
+        sessions: sessionResults.length,
+      },
+      byProvider,
+      byModel,
+      recentSessions,
+    };
+
+    _globalSessionsCache = { data: result, timestamp: now };
+    res.json(result);
+  } catch (err) {
+    console.error('Error getting global sessions:', err);
+    res.status(500).json({ error: 'Failed to get global sessions' });
   }
 });
 

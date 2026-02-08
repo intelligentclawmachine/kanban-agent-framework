@@ -161,6 +161,12 @@ function AgentCreator() {
       return
     }
 
+    if (!formData.model) {
+      toast.error('Model selection is required')
+      setActiveSection('model')
+      return
+    }
+
     const payload = {
       ...formData,
       name: formData.name.trim(),
@@ -330,10 +336,11 @@ function AgentCreator() {
                   {modelsData?.grouped ? (
                     <select
                       id="agentModel"
-                      className="form-input"
+                      className={`form-input${!formData.model ? ' field-warning' : ''}`}
                       value={formData.model}
                       onChange={(e) => updateField('model', e.target.value)}
                     >
+                      <option value="" disabled>-- Select a model --</option>
                       {Object.entries(modelsData.grouped).map(([provider, models]) => (
                         <optgroup key={provider} label={provider}>
                           {models.map((model) => (

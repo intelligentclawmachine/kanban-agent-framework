@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 
 export const useUIStore = create((set) => ({
-  // Active view: 'kanban' or 'agents'
+  // Active view: 'kanban', 'agents', 'sessions', or 'usage'
   activeView: 'kanban',
   setActiveView: (view) => set({ activeView: view }),
 

@@ -1,1 +1,141 @@
 /* Styles inherited from global index.css */
+
+.session-view-modal {
+  max-width: 640px;
+  width: 92vw;
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.session-view-summary {
+  padding: 12px 16px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sv-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+}
+
+.sv-label {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.sv-value {
+  color: var(--text-primary);
+}
+
+.sv-thoughts-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+  padding: 0 4px;
+}
+
+.sv-thought-count {
+  font-weight: 400;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.sv-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  animation: sv-pulse 2s ease-in-out infinite;
+}
+
+@keyframes sv-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+
+.sv-thoughts {
+  flex: 1;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--bg-primary);
+  min-height: 200px;
+  max-height: 400px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sv-thoughts-empty {
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-align: center;
+  padding: 40px 20px;
+  font-style: italic;
+}
+
+.sv-thought-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.sv-thought-thinking { background: rgba(139, 92, 246, 0.06); }
+.sv-thought-text { background: rgba(59, 130, 246, 0.06); }
+.sv-thought-tool { background: rgba(245, 158, 11, 0.08); }
+.sv-thought-toolResult { background: rgba(16, 185, 129, 0.06); }
+
+.sv-thought-icon {
+  flex-shrink: 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.sv-thought-content {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+  color: var(--text-primary);
+}
+
+.sv-tool-name {
+  font-weight: 600;
+  color: var(--accent-yellow, #f59e0b);
+  margin-right: 6px;
+}
+
+.sv-tool-args {
+  color: var(--text-secondary);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+}
+
+.sv-result-text {
+  color: var(--text-secondary);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+}
+
+.sv-actions {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}

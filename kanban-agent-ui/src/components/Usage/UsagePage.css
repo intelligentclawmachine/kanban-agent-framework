@@ -1,0 +1,207 @@
+/* Styles inherited from global index.css */
+
+.usage-page {
+  padding: var(--spacing-l);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-l);
+}
+
+.usage-totals {
+  display: flex;
+  gap: var(--spacing-m);
+  flex-wrap: wrap;
+}
+
+.usage-section {
+  background: var(--color-panel);
+  border-radius: var(--radius-m);
+  padding: var(--spacing-m);
+  border: 1px solid var(--color-border);
+}
+
+.usage-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-m);
+}
+
+.usage-section-header h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+/* Auth Profiles Strip */
+.auth-profiles-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.auth-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 20px;
+  font-size: 13px;
+  border: 1px solid var(--color-border);
+  background: var(--color-panel-soft);
+  transition: all 0.2s;
+}
+
+.auth-pill:hover {
+  border-color: var(--color-primary);
+}
+
+.auth-pill.healthy {
+  border-color: rgba(52, 211, 153, 0.3);
+}
+
+.auth-pill.expiring {
+  border-color: rgba(251, 191, 36, 0.4);
+  background: rgba(251, 191, 36, 0.06);
+}
+
+.auth-pill.expired {
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(248, 113, 113, 0.06);
+}
+
+.auth-pill-name {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.auth-pill-mode {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(90, 227, 255, 0.12);
+  color: var(--color-primary);
+}
+
+.auth-pill.expired .auth-pill-mode {
+  background: rgba(248, 113, 113, 0.15);
+  color: var(--color-error, #f87171);
+}
+
+.auth-pill-expiry {
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.auth-pill-expiry.healthy {
+  color: var(--color-success, #34d399);
+}
+
+.auth-pill-expiry.expiring {
+  color: #fbbf24;
+}
+
+.auth-pill-expiry.expired {
+  color: var(--color-error, #f87171);
+}
+
+.auth-pill-last {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+/* Provider Grid */
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--spacing-m);
+}
+
+.provider-card {
+  background: var(--color-panel-soft);
+  border-radius: var(--radius-s);
+  padding: var(--spacing-m);
+  border: 1px solid var(--color-border);
+  transition: all 0.2s;
+}
+
+.provider-card:hover {
+  border-color: var(--color-primary);
+}
+
+.provider-card-name {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+.provider-card-detail {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin: 4px 0;
+}
+
+.provider-card-models {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin: 4px 0;
+  opacity: 0.7;
+}
+
+.provider-card-cost {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-success);
+  margin-top: 8px;
+}
+
+/* Tables */
+.usage-table-wrap {
+  overflow-x: auto;
+}
+
+.usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.usage-table th {
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.usage-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.usage-table tbody tr:hover {
+  background: var(--color-panel-soft);
+}
+
+.usage-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-empty {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--color-text-muted);
+}
+
+.usage-empty-icon {
+  font-size: 32px;
+  margin-bottom: 8px;
+  opacity: 0.5;
+}
